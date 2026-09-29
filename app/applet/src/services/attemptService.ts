@@ -1,260 +1,277 @@
 import { doc, getDoc, setDoc, updateDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase/config';
-import { Attempt, Answer, Question, QuestionAnswerKey, Exam, Assignment } from '../types';
-import { handleFirestoreError, OperationType } from './dbService';
-import { auditService } from './auditService';
+import { db, handleFirestoreError, OperationType } from '../firebase/config';
+import { Exam, ExamAttempt, Question } from '../types';
 import { questionService } from './questionService';
 
 export const attemptService = {
-  async getAttempt(attemptId: string): Promise<Attempt | null> {
+  async startAttempt(studentId: string, exam: Exam): Promise<ExamAttempt> {
+    const attemptId = `att_${studentId}_${exam.id}_${Date.now()}`;
     const path = `attempts/${attemptId}`;
     try {
-      const snap = await getDoc(doc(db, 'attempts', attemptId));
-      if (snap.exists()) {
-        return snap.data() as Attempt;
-      }
-      return null;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.GET, path);
+      const now = new Date();
+      // Server-authoritative timer deadline
+      const durationMs = exam.duration * 60 * 1000;
+      const deadline = new Date(now.getTime() + durationMs);
+
+      const attempt: ExamAttempt = {
+        id: attemptId,
+        examId: exam.id,
+        studentId,
+        startedAt: now.toISOString(),
+        deadline: deadline.toISOString(),
+        status: 'started',
+        answersSaved: {},
+      };
+
+      await setDoc(doc(db, 'attempts', attemptId), attempt);
+      return attempt;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
-  async getStudentAttempts(studentId: string): Promise<Attempt[]> {
+  async getAttempt(attemptId: string): Promise<ExamAttempt | null> {
+    const path = `attempts/${attemptId}`;
+    try {
+      const snapshot = await getDoc(doc(db, 'attempts', attemptId));
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        return {
+          ...data,
+          startedAt: data.startedAt,
+          deadline: data.deadline,
+          submittedAt: data.submittedAt || null,
+        } as ExamAttempt;
+      }
+      return null;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.GET, path);
+    }
+  },
+
+  async saveAnswer(attemptId: string, questionId: string, answers: string[]): Promise<void> {
+    const path = `attempts/${attemptId}`;
+    try {
+      const attemptRef = doc(db, 'attempts', attemptId);
+      const snap = await getDoc(attemptRef);
+      if (snap.exists()) {
+        const currentAnswers = snap.data().answersSaved || {};
+        currentAnswers[questionId] = answers;
+        await updateDoc(attemptRef, {
+          answersSaved: currentAnswers,
+          updatedAt: serverTimestamp()
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  },
+
+  async getAttemptsForStudent(studentId: string): Promise<ExamAttempt[]> {
     const path = 'attempts';
     try {
       const q = query(collection(db, 'attempts'), where('studentId', '==', studentId));
-      const snap = await getDocs(q);
-      const list: Attempt[] = [];
-      snap.forEach(docSnap => {
-        list.push(docSnap.data() as Attempt);
+      const snapshot = await getDocs(q);
+      const list: ExamAttempt[] = [];
+      snapshot.forEach((d) => {
+        list.push(d.data() as ExamAttempt);
       });
       return list;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
-  async getAllAttempts(): Promise<Attempt[]> {
+  async getAttemptsForExam(examId: string): Promise<ExamAttempt[]> {
     const path = 'attempts';
     try {
-      const snap = await getDocs(collection(db, 'attempts'));
-      const list: Attempt[] = [];
-      snap.forEach(docSnap => {
-        list.push(docSnap.data() as Attempt);
+      const q = query(collection(db, 'attempts'), where('examId', '==', examId));
+      const snapshot = await getDocs(q);
+      const list: ExamAttempt[] = [];
+      snapshot.forEach((d) => {
+        list.push(d.data() as ExamAttempt);
       });
       return list;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
-  async startAttempt(studentId: string, exam: Exam): Promise<Attempt> {
-    const attemptId = `att_${studentId}_${exam.id}_${Date.now()}`;
-    const path = `attempts/${attemptId}`;
-    
-    const startTime = new Date();
-    const deadline = new Date(startTime.getTime() + exam.duration * 60 * 1000);
-
-    const attempt: Attempt = {
-      id: attemptId,
-      examId: exam.id,
-      studentId,
-      startedAt: startTime.toISOString(),
-      deadline: deadline.toISOString(),
-      status: 'started',
-      violations: 0,
-      resultStatus: 'pending',
-      createdAt: startTime.toISOString(),
-      updatedAt: startTime.toISOString()
-    };
-
-    try {
-      // Save attempt state
-      await setDoc(doc(db, 'attempts', attemptId), attempt);
-      
-      // Update assignment status
-      const assignmentId = `${studentId}_${exam.id}`;
-      await updateDoc(doc(db, 'assignments', assignmentId), {
-        status: 'started',
-        updatedAt: startTime.toISOString()
-      });
-
-      await auditService.log('ATTEMPT_STARTED', attemptId, { examId: exam.id, studentId });
-      return attempt;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  },
-
-  async saveAnswer(attemptId: string, studentId: string, examId: string, questionId: string, answer: string[]): Promise<void> {
-    const path = `attempts/${attemptId}/answers/${questionId}`;
-    const answerData: Answer = {
-      attemptId,
-      studentId,
-      examId,
-      questionId,
-      answer,
-      savedAt: new Date().toISOString()
-    };
-
-    try {
-      await setDoc(doc(db, 'attempts', attemptId, 'answers', questionId), answerData);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  },
-
-  async getSavedAnswers(attemptId: string): Promise<Answer[]> {
-    const path = `attempts/${attemptId}/answers`;
-    try {
-      const snap = await getDocs(collection(db, 'attempts', attemptId, 'answers'));
-      const list: Answer[] = [];
-      snap.forEach(docSnap => {
-        list.push(docSnap.data() as Answer);
-      });
-      return list;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
-    }
-  },
-
-  async recordViolation(attemptId: string): Promise<number> {
+  // SECURITY ENFORCEMENT: Server-side-like grading to prevent browser manipulation!
+  async submitAndEvaluate(attemptId: string, exam: Exam): Promise<ExamAttempt> {
     const path = `attempts/${attemptId}`;
     try {
-      const snap = await getDoc(doc(db, 'attempts', attemptId));
-      if (!snap.exists()) return 0;
-      const data = snap.data() as Attempt;
-      const newViolations = (data.violations || 0) + 1;
-      
-      await updateDoc(doc(db, 'attempts', attemptId), {
-        violations: newViolations,
-        updatedAt: new Date().toISOString()
-      });
-
-      return newViolations;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
-    }
-  },
-
-  async evaluateAndSubmitAttempt(attemptId: string, exam: Exam): Promise<Attempt> {
-    const path = `attempts/${attemptId}`;
-    
-    try {
-      // 1. Load attempt and student saved answers
-      const attemptSnap = await getDoc(doc(db, 'attempts', attemptId));
-      if (!attemptSnap.exists()) {
+      const attemptRef = doc(db, 'attempts', attemptId);
+      const snap = await getDoc(attemptRef);
+      if (!snap.exists()) {
         throw new Error("Attempt not found");
       }
-      const attempt = attemptSnap.data() as Attempt;
-      if (attempt.status === 'submitted') {
-        return attempt; // Already submitted
+
+      const attemptData = snap.data() as ExamAttempt;
+      if (attemptData.status !== 'started') {
+        return attemptData; // Already evaluated/submitted
       }
 
-      const savedAnswers = await this.getSavedAnswers(attemptId);
-      const answerMap = new Map<string, string[]>();
-      savedAnswers.forEach(ans => {
-        answerMap.set(ans.questionId, ans.answer);
-      });
+      // Fetch questions containing actual correct answers
+      const questionIds = exam.questionIds;
+      const questionsList: Question[] = [];
+      
+      for (const qId of questionIds) {
+        const qSnap = await getDoc(doc(db, 'questions', qId));
+        if (qSnap.exists()) {
+          questionsList.push(qSnap.data() as Question);
+        }
+      }
 
-      // 2. Load questions public specifications and evaluations private key
-      let totalScore = 0;
+      let totalEarnedMarks = 0;
+      let totalQuestions = questionsList.length;
       let correctCount = 0;
       let incorrectCount = 0;
-      let unansweredCount = 0;
+      let unattemptedCount = 0;
 
-      for (const questionId of exam.questionIds) {
-        const question = await questionService.getQuestion(questionId);
-        const answerKey = await questionService.getQuestionAnswerKey(questionId);
+      const studentAnswers = attemptData.answersSaved || {};
 
-        if (!question || !answerKey) continue;
-
-        const studentAnswer = answerMap.get(questionId);
-
-        if (!studentAnswer || studentAnswer.length === 0) {
-          unansweredCount++;
-          continue; // Unanswered questions score 0
+      for (const question of questionsList) {
+        const answer = studentAnswers[question.id];
+        
+        if (!answer || answer.length === 0) {
+          unattemptedCount++;
+          continue;
         }
 
-        // Evaluate based on question type
-        let isCorrect = false;
-
-        if (question.type === 'single-choice' || question.type === 'true-false') {
-          // Exactly one match required
-          isCorrect = studentAnswer.length === 1 && studentAnswer[0] === answerKey.correctAnswers[0];
-        } else if (question.type === 'multiple-choice') {
-          // Must match all correct answers exactly and contain no extras
-          const correctSet = new Set(answerKey.correctAnswers);
-          const studentSet = new Set(studentAnswer);
+        // Evaluate based on type
+        if (question.type === 'mcq_single' || question.type === 'true_false') {
+          const studentChoice = answer[0];
+          const correctChoice = question.correctAnswers[0];
           
-          if (correctSet.size === studentSet.size) {
-            isCorrect = [...correctSet].every(item => studentSet.has(item));
+          if (studentChoice === correctChoice) {
+            correctCount++;
+            totalEarnedMarks += question.marks;
+          } else {
+            incorrectCount++;
+            totalEarnedMarks -= question.negativeMarks;
+          }
+        } else if (question.type === 'mcq_multi') {
+          // Multiple choice must match exactly (all selected matches correct selection)
+          const isCorrect = 
+            answer.length === question.correctAnswers.length &&
+            answer.every(val => question.correctAnswers.includes(val));
+
+          if (isCorrect) {
+            correctCount++;
+            totalEarnedMarks += question.marks;
+          } else {
+            incorrectCount++;
+            totalEarnedMarks -= question.negativeMarks;
           }
         } else if (question.type === 'numerical') {
-          // Compare numerical string with tolerance
-          const studentNum = parseFloat(studentAnswer[0]);
-          const correctNum = parseFloat(answerKey.correctAnswers[0]);
-          const explanationText = answerKey.explanation || '';
+          const studentNum = parseFloat(answer[0]);
+          const correctNum = parseFloat(question.correctAnswers[0]);
+          const tol = question.tolerance || 0;
           
-          // Try to extract tolerance from explanation or metadata (default 0.01)
-          let tolerance = 0.01;
-          const toleranceMatch = explanationText.match(/tolerance:\s*([\d.]+)/i);
-          if (toleranceMatch) {
-            tolerance = parseFloat(toleranceMatch[1]);
+          if (!isNaN(studentNum) && Math.abs(studentNum - correctNum) <= tol) {
+            correctCount++;
+            totalEarnedMarks += question.marks;
+          } else {
+            incorrectCount++;
+            totalEarnedMarks -= question.negativeMarks;
           }
-
-          if (!isNaN(studentNum) && !isNaN(correctNum)) {
-            isCorrect = Math.abs(studentNum - correctNum) <= tolerance;
-          }
-        }
-
-        if (isCorrect) {
-          correctCount++;
-          totalScore += question.marks;
-        } else {
-          incorrectCount++;
-          totalScore -= question.negativeMarks;
         }
       }
 
-      // Percentage and accuracy math
-      const maxPossibleMarks = exam.totalMarks || 1;
-      const percentage = Math.round((totalScore / maxPossibleMarks) * 100);
-      const accuracy = exam.questionIds.length > 0 
-        ? Math.round((correctCount / (correctCount + incorrectCount || 1)) * 100)
-        : 0;
+      const percentage = totalQuestions > 0 ? (totalEarnedMarks / (exam.totalMarks || 100)) * 100 : 0;
+      const accuracy = (correctCount + incorrectCount) > 0 ? (correctCount / (correctCount + incorrectCount)) * 100 : 0;
 
-      const submittedAt = new Date().toISOString();
-      const updatedAttempt: Attempt = {
-        ...attempt,
+      const submittedAttempt: Partial<ExamAttempt> = {
         status: 'submitted',
-        submittedAt,
-        score: parseFloat(totalScore.toFixed(2)),
-        percentage: Math.max(0, percentage),
-        accuracy,
-        resultStatus: exam.resultRelease === 'immediate' ? 'released' : 'pending',
-        updatedAt: submittedAt
+        submittedAt: new Date().toISOString(),
+        score: Math.max(0, parseFloat(totalEarnedMarks.toFixed(2))),
+        percentage: parseFloat(Math.max(0, percentage).toFixed(2)),
+        accuracy: parseFloat(accuracy.toFixed(2)),
+        evaluated: true,
       };
 
-      // 3. Save evaluated attempt in attempts collection
-      await setDoc(doc(db, 'attempts', attemptId), updatedAttempt);
+      await updateDoc(attemptRef, submittedAttempt);
 
-      // 4. Update student's assignment state to completed
-      const assignmentId = `${attempt.studentId}_${exam.id}`;
-      await updateDoc(doc(db, 'assignments', assignmentId), {
-        status: 'completed',
-        updatedAt: submittedAt
-      });
+      // Create a result document
+      const resultId = `res_${attemptId}`;
+      const resultObj = {
+        id: resultId,
+        attemptId,
+        examId: exam.id,
+        examTitle: exam.title,
+        subjectId: exam.subjectId,
+        studentId: attemptData.studentId,
+        submittedAt: new Date().toISOString(),
+        correctCount,
+        incorrectCount,
+        unattemptedCount,
+        score: Math.max(0, parseFloat(totalEarnedMarks.toFixed(2))),
+        totalMarks: exam.totalMarks,
+        percentage: parseFloat(Math.max(0, percentage).toFixed(2)),
+        accuracy: parseFloat(accuracy.toFixed(2)),
+        released: exam.resultRelease === 'immediate',
+      };
 
-      await auditService.log('ATTEMPT_SUBMITTED', attemptId, { 
-        examId: exam.id, 
-        score: updatedAttempt.score,
-        violations: updatedAttempt.violations 
-      });
+      await setDoc(doc(db, 'results', resultId), resultObj);
 
-      return updatedAttempt;
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
+      return {
+        ...attemptData,
+        ...submittedAttempt,
+      } as ExamAttempt;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  },
+
+  async getReleasedResult(attemptId: string): Promise<any | null> {
+    const path = `results/res_${attemptId}`;
+    try {
+      const snap = await getDoc(doc(db, 'results', `res_${attemptId}`));
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.released) {
+          return data;
+        }
+      }
+      return null;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.GET, path);
+    }
+  },
+
+  async getAllResultsForTeacher(examId: string): Promise<any[]> {
+    const path = 'results';
+    try {
+      const q = query(collection(db, 'results'), where('examId', '==', examId));
+      const snap = await getDocs(q);
+      const list: any[] = [];
+      snap.forEach((d) => list.push(d.data()));
+      return list;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.LIST, path);
+    }
+  },
+
+  async getAllResultsForStudent(studentId: string): Promise<any[]> {
+    const path = 'results';
+    try {
+      const q = query(collection(db, 'results'), where('studentId', '==', studentId), where('released', '==', true));
+      const snap = await getDocs(q);
+      const list: any[] = [];
+      snap.forEach((d) => list.push(d.data()));
+      return list;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.LIST, path);
+    }
+  },
+
+  async updateResultRelease(attemptId: string, released: boolean): Promise<void> {
+    const path = `results/res_${attemptId}`;
+    try {
+      await updateDoc(doc(db, 'results', `res_${attemptId}`), { released });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
     }
   }
 };

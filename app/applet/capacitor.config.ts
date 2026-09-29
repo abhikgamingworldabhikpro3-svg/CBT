@@ -1,6 +1,4 @@
-import { CapacitorConfig } from '@capacitor/cli';
-
-const config: CapacitorConfig = {
+const config = {
   appId: 'com.cbt.examapp',
   appName: 'CBT Exam Engine',
   webDir: 'dist',

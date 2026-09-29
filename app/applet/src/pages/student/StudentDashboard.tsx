@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { User, Subject, Exam, Attempt, Assignment } from '../../types';
 import { examService } from '../../services/examService';
 import { attemptService } from '../../services/attemptService';
-import { db } from '../../firebase/config';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { Calendar, Clock, Award, PlayCircle, Eye, AlertCircle, BookOpen } from 'lucide-react';
+import { userService } from '../../services/userService';
+import { User, Exam, ExamAttempt } from '../../types';
+import { CheckCircle, AlertTriangle, Play, Calendar, ClipboardList, HelpCircle, FileSpreadsheet, Trophy, ShieldCheck } from 'lucide-react';
 
 interface StudentDashboardProps {
   currentUserProfile: User;
@@ -12,249 +11,205 @@ interface StudentDashboardProps {
 }
 
 export const StudentDashboard: React.FC<StudentDashboardProps> = ({ currentUserProfile, onNavigate }) => {
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
-  
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'assigned' | 'results'>('assigned');
+  const [assignedExams, setAssignedExams] = useState<Exam[]>([]);
+  const [attempts, setAttempts] = useState<ExamAttempt[]>([]);
+  const [results, setResults] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubSubjects = onSnapshot(collection(db, 'subjects'), (snap) => {
-      const list: Subject[] = [];
-      snap.forEach(d => list.push(d.data() as Subject));
-      setSubjects(list);
-    });
+    fetchStudentData();
+  }, []);
 
-    const unsubExams = onSnapshot(collection(db, 'exams'), (snap) => {
-      const list: Exam[] = [];
-      snap.forEach(d => list.push(d.data() as Exam));
-      setExams(list);
-    });
+  const fetchStudentData = async () => {
+    setLoading(true);
+    try {
+      const [examsList, attemptsList, resultsList, subsList] = await Promise.all([
+        examService.getAssignedExamsForStudent(currentUserProfile.uid),
+        attemptService.getAttemptsForStudent(currentUserProfile.uid),
+        attemptService.getAllResultsForStudent(currentUserProfile.uid),
+        userService.getAllSubjects()
+      ]);
 
-    // Load assignments specifically targeting this student
-    const qAssign = query(collection(db, 'assignments'), where('studentId', '==', currentUserProfile.uid));
-    const unsubAssignments = onSnapshot(qAssign, (snap) => {
-      const list: Assignment[] = [];
-      snap.forEach(d => list.push(d.data() as Assignment));
-      setAssignments(list);
-    });
+      setAssignedExams(examsList);
+      setAttempts(attemptsList);
+      setResults(resultsList);
 
-    // Load attempts specifically targeting this student
-    const qAttempts = query(collection(db, 'attempts'), where('studentId', '==', currentUserProfile.uid));
-    const unsubAttempts = onSnapshot(qAttempts, (snap) => {
-      const list: Attempt[] = [];
-      snap.forEach(d => list.push(d.data() as Attempt));
-      setAttempts(list);
+      // Create lookup dictionary for subjects
+      const subDict: Record<string, string> = {};
+      subsList.forEach(s => {
+        subDict[s.id] = s.name;
+      });
+      setSubjects(subDict);
+
+    } catch (err) {
+      console.error("Error loading candidate dashboard:", err);
+    } finally {
       setLoading(false);
-    });
-
-    return () => {
-      unsubSubjects();
-      unsubExams();
-      unsubAssignments();
-      unsubAttempts();
-    };
-  }, [currentUserProfile.uid]);
-
-  const getExamStatus = (exam: Exam, assignment: Assignment | undefined, attempt: Attempt | undefined) => {
-    const now = new Date().getTime();
-    const start = new Date(exam.startAt).getTime();
-    const end = new Date(exam.endAt).getTime();
-
-    if (attempt && attempt.status === 'submitted') {
-      return 'completed';
     }
-    if (now < start) {
-      return 'upcoming';
-    }
-    if (now > end) {
-      return 'ended';
-    }
-    return 'active';
   };
 
   if (loading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent"></div>
+      <div className="flex min-h-screen items-center justify-center p-6 bg-slate-50 dark:bg-slate-950 font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+          <span className="text-xs text-slate-500 font-mono">Syncing Candidate Session...</span>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Welcome header with Zero-Pill name display */}
-      <div className="flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 p-6 rounded-2xl border border-slate-200 dark:border-slate-800">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">Welcome, {currentUserProfile.name}</h2>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mt-1 font-mono">
-            <span>Student ID: {currentUserProfile.studentId}</span>
-            <span>·</span>
-            <span>Active Exams Assigned: {assignments.filter(a => a.status !== 'completed').length}</span>
-          </div>
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 font-sans text-slate-900 dark:text-slate-100">
+      
+      {/* Welcome Banner */}
+      <div className="rounded-2xl border border-indigo-100/40 bg-gradient-to-tr from-indigo-50/40 to-indigo-500/5 dark:from-indigo-950/20 dark:to-transparent p-6 mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="space-y-1.5">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Welcome back, {currentUserProfile.name}!</h2>
+          <p className="text-xs text-slate-500 leading-normal">
+            Your credentials are validated. Always verify stable network connection and secure proctor clearances before launching active examinations.
+          </p>
         </div>
-        <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-bold text-indigo-600 dark:text-indigo-400">
-          <Award className="w-4 h-4" />
-          <span>Roster Verified</span>
+        
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 px-4 py-2 border border-emerald-100 dark:border-emerald-950 text-xs">
+          <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          <span className="font-semibold text-emerald-800 dark:text-emerald-400 font-mono">Surveillance Portal Ready</span>
         </div>
       </div>
 
-      {/* Navigation tabs */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 gap-2">
-        <button 
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+        <button
           onClick={() => setActiveTab('assigned')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer ${activeTab === 'assigned' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'assigned' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
         >
-          My Assigned Exams
+          <ClipboardList className="h-3.5 w-3.5" />
+          <span>My Assigned Exams</span>
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('results')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer ${activeTab === 'results' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'results' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
         >
-          Released Results
+          <Trophy className="h-3.5 w-3.5" />
+          <span>Completed Results ({results.length})</span>
         </button>
       </div>
 
-      {/* Tab Contents: Assigned Exams */}
+      {/* ASSIGNED EXAMS VIEW */}
       {activeTab === 'assigned' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {assignments.map(assign => {
-            const exam = exams.find(e => e.id === assign.examId);
-            if (!exam) return null;
+        <div>
+          {assignedExams.length === 0 ? (
+            <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-slate-400 text-xs italic">
+              No examination papers assigned to you. Contact your teacher or supervisor to enroll.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {assignedExams.map(exam => {
+                const pastAttempt = attempts.find(a => a.examId === exam.id);
+                const isCompleted = pastAttempt && pastAttempt.status === 'submitted';
+                const subjectTitle = subjects[exam.subjectId] || exam.subjectId;
 
-            const sub = subjects.find(s => s.id === exam.subjectId);
-            const attempt = attempts.find(a => a.examId === exam.id);
-            const status = getExamStatus(exam, assign, attempt);
+                return (
+                  <div key={exam.id} className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4 text-xs flex flex-col justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between font-mono text-[10px] text-slate-400">
+                        <span className="font-semibold">{exam.subjectId} · {subjectTitle}</span>
+                        {isCompleted ? (
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20 px-1.5 py-0.5 rounded">COMPLETED</span>
+                        ) : (
+                          <span className="font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/20 px-1.5 py-0.5 rounded">ACTIVE</span>
+                        )}
+                      </div>
 
-            return (
-              <div key={assign.id} className="border border-slate-200 dark:border-slate-800 p-5 rounded-xl bg-white dark:bg-slate-900 shadow-xs space-y-4 flex flex-col justify-between">
-                <div className="space-y-2">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">{sub?.name}</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      status === 'completed' ? 'bg-emerald-50 text-emerald-700' :
-                      status === 'active' ? 'bg-indigo-50 text-indigo-700 animate-pulse' :
-                      status === 'upcoming' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {status}
-                    </span>
+                      <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm leading-snug">{exam.title}</h4>
+                      <p className="text-slate-400 leading-normal text-[11px] line-clamp-2">{exam.description || 'Instructions inside exam room.'}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-y border-slate-100 dark:border-slate-800 py-3 text-[11px] text-slate-500 font-mono leading-tight">
+                      <div>
+                        <span className="font-bold text-slate-400 block uppercase text-[9px]">Duration</span>
+                        <span className="font-bold text-slate-700 dark:text-slate-300">{exam.duration} minutes</span>
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-400 block uppercase text-[9px]">Questions</span>
+                        <span className="font-bold text-slate-700 dark:text-slate-300">{exam.questionIds?.length || 0} items</span>
+                      </div>
+                    </div>
+
+                    {isCompleted ? (
+                      <button
+                        onClick={() => onNavigate('student-exam-review', { examId: exam.id, attemptId: pastAttempt.id })}
+                        className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-indigo-200 text-indigo-600 py-2 font-semibold hover:bg-indigo-50 transition cursor-pointer"
+                      >
+                        <FileSpreadsheet className="h-3.5 w-3.5" />
+                        <span>Review My Paper</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onNavigate('exam-instructions', { examId: exam.id })}
+                        className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 text-white py-2 font-semibold hover:bg-indigo-700 shadow transition cursor-pointer"
+                      >
+                        <Play className="h-3 w-3 fill-white" />
+                        <span>Start Examination</span>
+                      </button>
+                    )}
                   </div>
-
-                  <h4 className="font-semibold text-slate-800 dark:text-slate-100 text-base line-clamp-1">{exam.title}</h4>
-                  <p className="text-xs text-slate-500 line-clamp-2 min-h-[32px]">{exam.description || 'No exam description provided.'}</p>
-                </div>
-
-                <div className="space-y-4 pt-3 border-t border-slate-100 dark:border-slate-800/60">
-                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-500">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{exam.duration} Minutes</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <BookOpen className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{exam.questionIds.length} Questions</span>
-                    </div>
-                  </div>
-
-                  <div className="text-[10px] text-slate-400 font-mono flex flex-col gap-0.5">
-                    <span>Window Start: {new Date(exam.startAt).toLocaleString()}</span>
-                    <span>Window End: {new Date(exam.endAt).toLocaleString()}</span>
-                  </div>
-
-                  {status === 'active' && attempt?.status !== 'submitted' && (
-                    <button
-                      onClick={() => onNavigate('exam-instructions', { examId: exam.id })}
-                      className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
-                    >
-                      <PlayCircle className="w-4 h-4" />
-                      Enter Examination Room
-                    </button>
-                  )}
-
-                  {status === 'upcoming' && (
-                    <div className="w-full text-center py-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-[11px] font-medium text-slate-500 flex items-center justify-center gap-1 border border-slate-200 dark:border-slate-800">
-                      <Calendar className="w-3.5 h-3.5" />
-                      Locked (Window not open yet)
-                    </div>
-                  )}
-
-                  {status === 'completed' && (
-                    <div className="w-full text-center py-2 bg-emerald-50 dark:bg-emerald-950/10 rounded-lg text-[11px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center justify-center gap-1 border border-emerald-100 dark:border-emerald-950/20">
-                      <Award className="w-3.5 h-3.5" />
-                      Exam Already Submitted
-                    </div>
-                  )}
-
-                  {status === 'ended' && attempt?.status !== 'submitted' && (
-                    <div className="w-full text-center py-2 bg-rose-50 dark:bg-rose-950/10 rounded-lg text-[11px] font-bold text-rose-700 dark:text-rose-400 flex items-center justify-center gap-1 border border-rose-100 dark:border-rose-950/20">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      Exam Window Expired
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {assignments.length === 0 && (
-            <div className="col-span-full py-16 text-center text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
-              No exams assigned yet. Ask your subject teacher to map your credentials to an exam roster.
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* Tab Contents: Released Results */}
+      {/* RESULTS ARCHIVE VIEW */}
       {activeTab === 'results' && (
-        <div className="space-y-6">
-          <div className="overflow-x-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs p-5">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-xs font-semibold uppercase text-slate-500">
-                  <th className="py-3 px-4">Exam Name</th>
-                  <th className="py-3 px-4">Subject</th>
-                  <th className="py-3 px-4">Score Obtained</th>
-                  <th className="py-3 px-4">Percentage</th>
-                  <th className="py-3 px-4">Accuracy</th>
-                  <th className="py-3 px-4">Submitted At</th>
-                  <th className="py-3 px-4 text-right">Review Answers</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm font-medium">
-                {attempts.filter(a => a.status === 'submitted' && a.resultStatus === 'released').map(a => {
-                  const exam = exams.find(e => e.id === a.examId);
-                  const sub = subjects.find(s => s.id === exam?.subjectId);
-                  return (
-                    <tr key={a.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
-                      <td className="py-3.5 px-4 text-slate-800 dark:text-slate-100">{exam?.title || a.examId}</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-normal">{sub?.name || '-'}</td>
-                      <td className="py-3.5 px-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">{a.score} / {exam?.totalMarks}</td>
-                      <td className="py-3.5 px-4 font-mono">{a.percentage}%</td>
-                      <td className="py-3.5 px-4 font-mono">{a.accuracy}%</td>
-                      <td className="py-3.5 px-4 text-slate-400 font-normal">{a.submittedAt ? new Date(a.submittedAt).toLocaleDateString() : '-'}</td>
-                      <td className="py-3.5 px-4 text-right">
+        <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm text-xs">
+          <h3 className="font-bold border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">Official Released Assessment Results</h3>
+          
+          {results.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 italic">
+              No results have been officially released by your supervisor yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
+                    <th className="py-2.5">Course/Exam</th>
+                    <th className="py-2.5">Date Submitted</th>
+                    <th className="py-2.5 text-right">Correct</th>
+                    <th className="py-2.5 text-right">Score</th>
+                    <th className="py-2.5 text-right">Accuracy</th>
+                    <th className="py-2.5 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map(res => (
+                    <tr key={res.id} className="border-b border-slate-100 dark:border-slate-800 last:border-none">
+                      <td className="py-3 font-semibold text-indigo-600">{res.examTitle} ({res.subjectId})</td>
+                      <td className="py-3 font-mono text-slate-400">{new Date(res.submittedAt).toLocaleDateString()}</td>
+                      <td className="py-3 text-right font-mono">{res.correctCount} / {res.correctCount + res.incorrectCount + res.unattemptedCount}</td>
+                      <td className="py-3 text-right font-mono font-bold text-emerald-600">{res.score} pts ({res.percentage}%)</td>
+                      <td className="py-3 text-right font-mono text-slate-500">{res.accuracy}%</td>
+                      <td className="py-3 text-right">
                         <button
-                          onClick={() => onNavigate('student-exam-review', { attemptId: a.id, examId: a.examId })}
-                          className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 justify-end cursor-pointer"
+                          onClick={() => onNavigate('student-exam-review', { examId: res.examId, attemptId: res.attemptId })}
+                          className="text-indigo-600 font-semibold hover:underline cursor-pointer"
                         >
-                          <Eye className="w-3.5 h-3.5" />
-                          View Paper
+                          Review details
                         </button>
                       </td>
                     </tr>
-                  );
-                })}
-                {attempts.filter(a => a.status === 'submitted' && a.resultStatus === 'released').length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="py-10 text-center text-slate-400 font-normal">No released test papers available yet.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
+
     </div>
   );
 };

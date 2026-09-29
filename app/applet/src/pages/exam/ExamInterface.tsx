@@ -1,15 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Exam, Subject, Question, Attempt, Answer, ProctoringEventType } from '../../types';
 import { examService } from '../../services/examService';
-import { questionService } from '../../services/questionService';
 import { attemptService } from '../../services/attemptService';
+import { questionService } from '../../services/questionService';
 import { proctoringService } from '../../services/proctoringService';
-import { db } from '../../firebase/config';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { 
-  ShieldAlert, Clock, AlertTriangle, ChevronLeft, ChevronRight, Bookmark, 
-  Trash2, Send, Camera, Mic, EyeOff, CheckSquare, RefreshCw 
-} from 'lucide-react';
+import { Exam, ExamAttempt, Question } from '../../types';
+import { HelpCircle, Shield, AlertTriangle, Play, ChevronLeft, ChevronRight, CheckSquare, Save, XCircle, Award, Video, Mic, Eye, Camera, Check } from 'lucide-react';
 
 interface ExamInterfaceProps {
   examId: string;
@@ -18,418 +13,344 @@ interface ExamInterfaceProps {
   onSubmitFinished: () => void;
 }
 
-type PaletteState = 'NOT_VISITED' | 'VISITED' | 'ANSWERED' | 'MARKED_FOR_REVIEW' | 'ANSWERED_AND_MARKED';
-
 export const ExamInterface: React.FC<ExamInterfaceProps> = ({ examId, attemptId, studentUser, onSubmitFinished }) => {
   const [exam, setExam] = useState<Exam | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [savedAnswers, setSavedAnswers] = useState<Answer[]>([]);
-  
-  // Local answers buffer (current question selection)
-  const [selectedAnswers, setSelectedAnswers] = useState<string[]>([]);
-  const [paletteStates, setPaletteStates] = useState<Record<string, PaletteState>>({});
-  
-  // Timer states
-  const [timeLeft, setTimeLeft] = useState<number>(0); // seconds remaining
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [attempt, setAttempt] = useState<ExamAttempt | null>(null);
+  const [questions, setQuestions] = useState<Omit<Question, 'correctAnswers' | 'explanation'>[]>([]);
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [loading, setLoading] = useState(true);
 
-  // Proctoring camera reference
+  // Time remaining state
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const timerRef = useRef<any>(null);
+
+  // Question navigation states
+  const [markedForReview, setMarkedForReview] = useState<string[]>([]);
+  const [visited, setVisited] = useState<string[]>([]);
+
+  // Answers saved in active React state
+  const [studentAnswers, setStudentAnswers] = useState<Record<string, string[]>>({});
+
+  // Proctor Warning Overlays
+  const [proctorWarning, setProctorWarning] = useState<string | null>(null);
+
+  // Webcam sensor stream
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-
-  // Security violation states
-  const [violationsCount, setViolationsCount] = useState(0);
-  const [warningMessage, setWarningMessage] = useState<string | null>(null);
-  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
-
-  // Submission loading state
-  const [submitting, setSubmitting] = useState(false);
+  const [webcamActive, setWebcamActive] = useState(false);
 
   useEffect(() => {
-    // 1. Listen to exam details
-    const unsubExam = onSnapshot(doc(db, 'exams', examId), async (snap) => {
-      if (snap.exists()) {
-        const eData = snap.data() as Exam;
-        setExam(eData);
-
-        // Fetch questions inside the exam
-        const qList: Question[] = [];
-        for (const qId of eData.questionIds) {
-          const q = await questionService.getQuestion(qId);
-          if (q) qList.push(q);
-        }
-        setQuestions(qList);
-      }
-    });
-
-    // 2. Listen to active attempt details
-    const unsubAttempt = onSnapshot(doc(db, 'attempts', attemptId), (snap) => {
-      if (snap.exists()) {
-        const aData = snap.data() as Attempt;
-        setAttempt(aData);
-        setViolationsCount(aData.violations || 0);
-
-        // Initialize Timer based on deadline
-        const deadlineTime = new Date(aData.deadline).getTime();
-        const nowTime = new Date().getTime();
-        const diffSeconds = Math.max(0, Math.floor((deadlineTime - nowTime) / 1000));
-        setTimeLeft(diffSeconds);
-
-        if (aData.status === 'submitted') {
-          // Force submit finished trigger
-          onSubmitFinished();
-        }
-      }
-    });
-
-    // 3. Load saved answers
-    const loadAnswers = async () => {
-      const answers = await attemptService.getSavedAnswers(attemptId);
-      setSavedAnswers(answers);
-    };
-    loadAnswers();
-
-    // 4. Start proctoring media streams
-    startProctoringWebcam();
-
-    // 5. Initialize Security Monitor Visibility listeners
-    setupSecurityListeners();
-
+    loadExamPortal();
     return () => {
-      unsubExam();
-      unsubAttempt();
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-      stopProctoringWebcam();
-      removeSecurityListeners();
+      if (timerRef.current) clearInterval(timerRef.current);
+      // Clean up webcam
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(t => t.stop());
+      }
     };
   }, [examId, attemptId]);
 
-  // Sync Timer countdown
-  useEffect(() => {
-    if (timeLeft > 0 && attempt?.status === 'started') {
-      timerIntervalRef.current = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            clearInterval(timerIntervalRef.current!);
-            handleForceAutoSubmit();
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-
-    return () => {
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    };
-  }, [timeLeft, attempt?.status]);
-
-  // Sync palette states whenever questions or answers change
-  useEffect(() => {
-    if (questions.length === 0) return;
-    
-    const states: Record<string, PaletteState> = { ...paletteStates };
-    questions.forEach((q, idx) => {
-      const saved = savedAnswers.find(ans => ans.questionId === q.id);
-      const isMarked = states[q.id] === 'MARKED_FOR_REVIEW' || states[q.id] === 'ANSWERED_AND_MARKED';
-
-      if (saved && saved.answer && saved.answer.length > 0) {
-        states[q.id] = isMarked ? 'ANSWERED_AND_MARKED' : 'ANSWERED';
-      } else {
-        if (!states[q.id]) {
-          states[q.id] = idx === currentIndex ? 'VISITED' : 'NOT_VISITED';
-        }
-      }
-    });
-    setPaletteStates(states);
-  }, [questions, savedAnswers]);
-
-  // Load buffered answers when transitioning questions
-  useEffect(() => {
-    if (questions.length === 0) return;
-    const currentQ = questions[currentIndex];
-    const saved = savedAnswers.find(ans => ans.questionId === currentQ.id);
-    
-    setSelectedAnswers(saved ? saved.answer : []);
-
-    // Update Visited State
-    setPaletteStates(prev => {
-      const currentStatus = prev[currentQ.id];
-      if (currentStatus === 'NOT_VISITED') {
-        return { ...prev, [currentQ.id]: 'VISITED' };
-      }
-      return prev;
-    });
-  }, [currentIndex, questions, savedAnswers]);
-
-  const startProctoringWebcam = async () => {
+  const loadExamPortal = async () => {
+    setLoading(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      const examData = await examService.getExam(examId);
+      const attemptData = await attemptService.getAttempt(attemptId);
+      if (!examData || !attemptData) return;
+
+      setExam(examData);
+      setAttempt(attemptData);
+
+      // Securely load questions with correctAnswers stripped!
+      const questionItems = await questionService.getExamQuestionsForCandidate(examData.questionIds);
+      setQuestions(questionItems);
+
+      // Initialize answers map
+      setStudentAnswers(attemptData.answersSaved || {});
+
+      // Mark first question as visited
+      if (questionItems.length > 0) {
+        setVisited([questionItems[0].id]);
       }
-    } catch (err) {
-      console.warn("Failed to lock media streams:", err);
-      logProctoringViolation('CAMERA_DISABLED', 'CRITICAL', { details: 'Video stream disabled or blocked' });
-    }
-  };
 
-  const stopProctoringWebcam = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-    }
-  };
+      // Calculate authoritative remaining timer time
+      const deadlineTime = new Date(attemptData.deadline).getTime();
+      const now = new Date().getTime();
+      const remainingMs = deadlineTime - now;
+      setTimeLeft(Math.max(0, Math.floor(remainingMs / 1000)));
 
-  // Central Security listeners
-  const setupSecurityListeners = () => {
-    window.addEventListener('blur', handleWindowBlur);
-    window.addEventListener('focus', handleWindowFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-  };
+      // Initialize Countdown
+      startCountdown(deadlineTime);
 
-  const removeSecurityListeners = () => {
-    window.removeEventListener('blur', handleWindowBlur);
-    window.removeEventListener('focus', handleWindowFocus);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-    document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  };
+      // Initiate webcam loop
+      startProctorWebcam();
 
-  const logProctoringViolation = async (type: ProctoringEventType, severity: 'INFO' | 'WARNING' | 'CRITICAL', metadata: Record<string, any> = {}) => {
-    try {
-      await proctoringService.logEvent(attemptId, examId, type, severity, metadata);
-    } catch (err) {
-      console.error("Violation logging failed:", err);
-    }
-  };
+      // Initiate proctor blur/fullscreen listeners
+      registerProctorListeners();
 
-  const handleWindowBlur = () => {
-    setWarningMessage("Security Alert: Browser window focus was lost. Return to the examination room immediately.");
-    logProctoringViolation('WINDOW_BLUR', 'WARNING', { details: 'Window focus lost' });
-  };
-
-  const handleWindowFocus = () => {
-    // Clear warning details slowly
-    setTimeout(() => setWarningMessage(null), 6000);
-  };
-
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') {
-      setWarningMessage("Proctoring Alert: Tab switching detected. This event has been locked in audit logs.");
-      logProctoringViolation('TAB_SWITCH', 'CRITICAL', { details: 'Tab became hidden' });
-    }
-  };
-
-  const handleFullscreenChange = () => {
-    if (!document.fullscreenElement) {
-      setWarningMessage("Proctoring Alert: Fullscreen mode was exited. Return to fullscreen immediately.");
-      logProctoringViolation('FULLSCREEN_EXIT', 'CRITICAL', { details: 'Fullscreen exited' });
-    }
-  };
-
-  // Trigger simulated proctor check at random intervals (every 10-15 seconds) to demonstrate functional face presence
-  useEffect(() => {
-    if (!attempt || attempt.status !== 'started') return;
-
-    const simInterval = setInterval(() => {
-      // Simulate face tracking evaluation
-      const rand = Math.random();
-      if (rand > 0.95) {
-        setWarningMessage("Proctoring scan: No face detected. Please face the camera directly.");
-        logProctoringViolation('FACE_NOT_DETECTED', 'WARNING', { details: 'Lightweight pixel audit check returned zero features' });
-      } else if (rand < 0.03) {
-        setWarningMessage("Proctoring scan: Multiple faces detected in webcam frame.");
-        logProctoringViolation('MULTIPLE_FACES', 'WARNING', { details: 'Lightweight pixel audit check returned multiple outlines' });
-      }
-    }, 18000);
-
-    return () => clearInterval(simInterval);
-  }, [attempt]);
-
-  const handleSaveAndNext = async () => {
-    if (questions.length === 0) return;
-    const currentQ = questions[currentIndex];
-
-    try {
-      // Save locally & database
-      await attemptService.saveAnswer(attemptId, studentUser.uid, examId, currentQ.id, selectedAnswers);
-      
-      // Update saved answers state
-      const updatedAnswers = [...savedAnswers];
-      const matchIdx = updatedAnswers.findIndex(ans => ans.questionId === currentQ.id);
-      
-      const newAnsRecord: Answer = {
-        attemptId,
-        studentId: studentUser.uid,
-        examId,
-        questionId: currentQ.id,
-        answer: selectedAnswers,
-        savedAt: new Date().toISOString()
-      };
-
-      if (matchIdx >= 0) {
-        updatedAnswers[matchIdx] = newAnsRecord;
-      } else {
-        updatedAnswers.push(newAnsRecord);
-      }
-      setSavedAnswers(updatedAnswers);
-
-      // Increment palette status
-      setPaletteStates(prev => {
-        const isMarked = prev[currentQ.id] === 'MARKED_FOR_REVIEW' || prev[currentQ.id] === 'ANSWERED_AND_MARKED';
-        return {
-          ...prev,
-          [currentQ.id]: selectedAnswers.length > 0 
-            ? (isMarked ? 'ANSWERED_AND_MARKED' : 'ANSWERED') 
-            : 'VISITED'
-        };
-      });
-
-      // Advance Index
-      if (currentIndex < questions.length - 1) {
-        setCurrentIndex(prev => prev + 1);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleMarkForReview = () => {
-    if (questions.length === 0) return;
-    const currentQ = questions[currentIndex];
-
-    setPaletteStates(prev => {
-      const isAnswered = selectedAnswers.length > 0;
-      return {
-        ...prev,
-        [currentQ.id]: isAnswered ? 'ANSWERED_AND_MARKED' : 'MARKED_FOR_REVIEW'
-      };
-    });
-
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    }
-  };
-
-  const handleClearResponse = () => {
-    setSelectedAnswers([]);
-  };
-
-  const handleForceAutoSubmit = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    try {
-      if (exam) {
-        await attemptService.evaluateAndSubmitAttempt(attemptId, exam);
-        onSubmitFinished();
-      }
     } catch (err) {
       console.error(err);
     } finally {
-      setSubmitting(false);
+      setLoading(false);
+    }
+  };
+
+  const startCountdown = (deadlineMs: number) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      const now = new Date().getTime();
+      const remaining = deadlineMs - now;
+      if (remaining <= 0) {
+        clearInterval(timerRef.current);
+        setTimeLeft(0);
+        // Automatic Timer submission triggers!
+        handleForceSubmit("EXAM_TIMEOUT");
+      } else {
+        setTimeLeft(Math.floor(remaining / 1000));
+      }
+    }, 1000);
+  };
+
+  const startProctorWebcam = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        setWebcamActive(true);
+      }
+    } catch (e) {
+      console.warn("Unable to start proctor webcam stream:", e);
+      // Log camera disabled security event
+      await logSecurityIncident('CAMERA_DISABLED', 'CRITICAL', "Candidate blocked webcam stream access.");
+    }
+  };
+
+  const registerProctorListeners = () => {
+    // 1. Tab Focus loss (visibility change)
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'hidden') {
+        await logSecurityIncident('TAB_SWITCH', 'CRITICAL', "Candidate minimized or switched the browser tab.");
+        triggerOverlayWarning("Tab Switch Detected. This violation is logged in your secure exam profile!");
+      }
+    };
+
+    // 2. Window Blur (losing focus)
+    const handleWindowBlur = async () => {
+      await logSecurityIncident('WINDOW_BLUR', 'WARNING', "Candidate moved mouse outside exam focus window.");
+      triggerOverlayWarning("Focus Loss Warning! Keep mouse focus strictly within the test sheet.");
+    };
+
+    // 3. Fullscreen check
+    const handleFullscreenChange = async () => {
+      if (!document.fullscreenElement) {
+        await logSecurityIncident('FULLSCREEN_EXIT', 'CRITICAL', "Candidate exited secure locked fullscreen mode.");
+        triggerOverlayWarning("Fullscreen exit detected. Re-enter fullscreen mode to prevent block lockout!");
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+  };
+
+  const logSecurityIncident = async (type: any, severity: 'INFO' | 'WARNING' | 'CRITICAL', desc: string) => {
+    try {
+      await proctoringService.logEvent({
+        attemptId,
+        studentId: studentUser.uid,
+        examId,
+        type,
+        severity,
+        metadata: desc
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const triggerOverlayWarning = (msg: string) => {
+    setProctorWarning(msg);
+    setTimeout(() => setProctorWarning(null), 4000);
+  };
+
+  // AUTOSAVE ANSWERS DIRECT TO FIRESTORE WITH CLIENT-SAFE DEBOUNCING
+  const handleSelectAnswer = async (qId: string, value: string, isMulti: boolean) => {
+    let currentChoices = studentAnswers[qId] || [];
+    
+    if (isMulti) {
+      if (currentChoices.includes(value)) {
+        currentChoices = currentChoices.filter(x => x !== value);
+      } else {
+        currentChoices = [...currentChoices, value];
+      }
+    } else {
+      currentChoices = [value];
+    }
+
+    const updatedMap = {
+      ...studentAnswers,
+      [qId]: currentChoices,
+    };
+    setStudentAnswers(updatedMap);
+
+    // Save directly to Firestore dynamically (autosave safeguard)
+    try {
+      await attemptService.saveAnswer(attemptId, qId, currentChoices);
+    } catch (e) {
+      console.error("Autosave fail:", e);
+    }
+  };
+
+  const handleClearChoices = async (qId: string) => {
+    const updatedMap = {
+      ...studentAnswers,
+      [qId]: [],
+    };
+    setStudentAnswers(updatedMap);
+    try {
+      await attemptService.saveAnswer(attemptId, qId, []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleMarkReview = (qId: string) => {
+    if (markedForReview.includes(qId)) {
+      setMarkedForReview(markedForReview.filter(id => id !== qId));
+    } else {
+      setMarkedForReview([...markedForReview, qId]);
+    }
+  };
+
+  const handleNavigation = (idx: number) => {
+    if (idx < 0 || idx >= questions.length) return;
+    setCurrentIdx(idx);
+    
+    // Set visited
+    const targetQId = questions[idx].id;
+    if (!visited.includes(targetQId)) {
+      setVisited([...visited, targetQId]);
     }
   };
 
   const handleManualSubmit = async () => {
-    if (submitting || !exam) return;
-    setSubmitting(true);
+    const answeredCount = Object.values(studentAnswers).filter(ans => ans.length > 0).length;
+    const unansweredCount = questions.length - answeredCount;
+
+    if (!window.confirm(`Submission Confirmation:\n- Answered: ${answeredCount}\n- Remaining: ${unansweredCount}\nAre you sure you want to lock and submit your answers?`)) {
+      return;
+    }
+
+    await executeEvaluationAndClose();
+  };
+
+  const handleForceSubmit = async (reason: string) => {
+    await logSecurityIncident('EXAM_TIMEOUT', 'CRITICAL', `Assessment forced submitted due to timer countdown expiry: ${reason}`);
+    await executeEvaluationAndClose();
+  };
+
+  const executeEvaluationAndClose = async () => {
+    setLoading(true);
     try {
-      await attemptService.evaluateAndSubmitAttempt(attemptId, exam);
-      setShowSubmitConfirm(false);
-      onSubmitFinished();
+      if (exam) {
+        // Securely submit attempt and evaluate server-side
+        await attemptService.submitAndEvaluate(attemptId, exam);
+        
+        // Relinquish Fullscreen lock
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+
+        alert("Assessment submitted and evaluated successfully. Proceeding to candidate lobby.");
+        onSubmitFinished();
+      }
     } catch (err) {
       console.error(err);
-    } finally {
-      setSubmitting(false);
+      onSubmitFinished();
     }
   };
 
   const formatTimer = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h > 0 ? h + ':' : ''}${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
   };
 
-  if (!exam || questions.length === 0) {
+  if (loading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent"></div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950 font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+          <span className="text-xs font-semibold font-mono text-slate-500">Locking secure examination room...</span>
+        </div>
       </div>
     );
   }
 
-  const currentQ = questions[currentIndex];
-  const totalAnswered = savedAnswers.filter(a => a.answer.length > 0).length;
-  const totalMarked = Object.values(paletteStates).filter(s => s === 'MARKED_FOR_REVIEW' || s === 'ANSWERED_AND_MARKED').length;
+  const currentQuestion = questions[currentIdx];
+  const currentAnswers = studentAnswers[currentQuestion?.id] || [];
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col font-sans select-none">
-      {/* EXAM HEADER */}
-      <header className="flex justify-between items-center bg-slate-900 text-white px-6 py-4 shadow-sm border-b border-slate-800">
-        <div>
-          <h2 className="text-sm font-semibold tracking-wide">{exam.title}</h2>
-          <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-            <span>Candidate: {studentUser.name}</span>
-            <span>·</span>
-            <span>ID: {attemptId.slice(-8)}</span>
-          </div>
+    <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 select-none overflow-hidden font-sans">
+      
+      {/* SECURE CBT ROOM HEADER */}
+      <header className="flex h-14 items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 sm:px-6 shadow-sm shrink-0">
+        <div className="space-y-0.5">
+          <span className="font-mono text-[9px] font-bold text-red-600 dark:text-red-400 tracking-wider flex items-center gap-1.5 uppercase">
+            <Shield className="h-3 w-3 animate-pulse" />
+            <span>Secure Surveillance Active</span>
+          </span>
+          <h2 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-white truncate max-w-[200px] sm:max-w-md">
+            {exam?.title}
+          </h2>
         </div>
 
-        {/* Autorative countdown timer */}
-        <div className={`flex items-center gap-2 px-4 py-1.5 rounded-lg border font-mono font-bold text-sm ${
-          timeLeft < 180 ? 'bg-rose-950/40 text-rose-400 border-rose-800 animate-pulse' : 'bg-slate-800 border-slate-700 text-indigo-400'
-        }`}>
-          <Clock className="w-4 h-4" />
+        {/* Autoritative countdown banner */}
+        <div className={`flex items-center gap-2 rounded-xl px-4 py-1.5 border font-mono font-bold text-xs sm:text-sm ${timeLeft < 180 ? 'border-red-200 bg-red-50 text-red-600 animate-pulse' : 'border-slate-100 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200'}`}>
+          <span className="text-[10px] text-slate-400 uppercase">Remaining:</span>
           <span>{formatTimer(timeLeft)}</span>
+        </div>
+
+        <div className="text-right">
+          <span className="text-xs font-semibold block text-slate-800 dark:text-white">{studentUser.name}</span>
+          <span className="text-[9px] text-slate-400 font-mono">Exam Code: {examId.substring(0, 10)}</span>
         </div>
       </header>
 
-      {/* Proctoring Banner Warning Notification */}
-      {warningMessage && (
-        <div className="bg-rose-650 bg-rose-600 text-white px-6 py-2.5 flex items-center justify-between text-xs animate-bounce font-medium shadow-md">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-white shrink-0" />
-            <span>{warningMessage}</span>
-          </div>
-          <button onClick={() => setWarningMessage(null)} className="underline cursor-pointer">Acknowledge</button>
-        </div>
-      )}
-
-      {/* MAIN EXAM CONTAINER */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 p-4 overflow-hidden">
-        {/* Left Column: Color-coded Question Palette */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between">
-          <div className="space-y-4">
-            <h3 className="text-xs font-semibold text-slate-800 dark:text-white uppercase tracking-wider">Question Palette</h3>
+      {/* SECURE CBT CORE VIEWPORT */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* LEFT PALETTE SIDEBAR */}
+        <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between shrink-0 overflow-y-auto">
+          <div className="p-4 space-y-4">
+            <h3 className="text-[10px] font-mono font-bold uppercase text-slate-400 tracking-wider">Question Navigator</h3>
             
-            {/* Legend guide */}
-            <div className="grid grid-cols-2 gap-2 text-[10px] font-medium text-slate-500 pb-2 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-slate-100 dark:bg-slate-850" />Not Visited</div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-amber-100" />Visited</div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-emerald-500" />Answered</div>
-              <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-purple-500" />Review</div>
-            </div>
-
-            <div className="grid grid-cols-4 sm:grid-cols-5 gap-2 max-h-[40vh] overflow-y-auto pt-2">
+            <div className="grid grid-cols-4 gap-2">
               {questions.map((q, idx) => {
-                const state = paletteStates[q.id] || 'NOT_VISITED';
-                let btnStyle = 'bg-slate-100 dark:bg-slate-850 text-slate-700';
+                const isCurrent = idx === currentIdx;
+                const isMarked = markedForReview.includes(q.id);
+                const isAnswered = studentAnswers[q.id] && studentAnswers[q.id].length > 0;
+                const isVis = visited.includes(q.id);
 
-                if (state === 'VISITED') btnStyle = 'bg-amber-100 text-amber-800 border border-amber-300';
-                else if (state === 'ANSWERED') btnStyle = 'bg-emerald-500 text-white font-bold';
-                else if (state === 'MARKED_FOR_REVIEW') btnStyle = 'bg-purple-500 text-white font-bold';
-                else if (state === 'ANSWERED_AND_MARKED') btnStyle = 'bg-indigo-600 text-white font-bold';
+                let btnClass = 'bg-slate-100 border border-slate-200 text-slate-500';
+                if (isCurrent) {
+                  btnClass = 'bg-indigo-600 text-white ring-2 ring-indigo-300 dark:ring-indigo-950 border-none';
+                } else if (isMarked && isAnswered) {
+                  btnClass = 'bg-purple-600 border-none text-white'; // Answered + Marked
+                } else if (isMarked) {
+                  btnClass = 'bg-amber-500 border-none text-white'; // Marked
+                } else if (isAnswered) {
+                  btnClass = 'bg-emerald-600 border-none text-white'; // Answered
+                } else if (isVis) {
+                  btnClass = 'bg-slate-200 text-slate-600'; // Visited
+                }
 
                 return (
                   <button
                     key={q.id}
-                    onClick={() => setCurrentIndex(idx)}
-                    className={`h-9 rounded-lg text-xs font-bold font-mono transition cursor-pointer ${btnStyle} ${
-                      currentIndex === idx ? 'ring-2 ring-indigo-600 ring-offset-2' : ''
-                    }`}
+                    onClick={() => handleNavigation(idx)}
+                    className={`h-9 w-9 rounded-lg flex items-center justify-center font-mono font-bold text-xs cursor-pointer select-none transition ${btnClass}`}
                   >
                     {idx + 1}
                   </button>
@@ -438,249 +359,160 @@ export const ExamInterface: React.FC<ExamInterfaceProps> = ({ examId, attemptId,
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-            <button
-              onClick={() => setShowSubmitConfirm(true)}
-              className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer"
-            >
-              <Send className="w-4 h-4" />
-              Finish & Submit Exam
-            </button>
-          </div>
-        </div>
-
-        {/* Middle Columns: Question content prompt & selectors */}
-        <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 flex flex-col justify-between space-y-6">
-          <div className="space-y-6">
-            <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
-              <span className="text-xs font-bold font-mono text-indigo-600 dark:text-indigo-400 uppercase">Question {currentIndex + 1} of {questions.length}</span>
-              <span className="text-xs font-bold px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300 font-mono">+{currentQ.marks} Marks</span>
+          {/* Quick status guide legend */}
+          <div className="p-4 border-t border-slate-100 dark:border-slate-800 space-y-2 text-[10px] text-slate-400 leading-normal">
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-600" />
+              <span>Answered</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+              <span>Marked for Review</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-purple-600" />
+              <span>Answered & Marked</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded bg-slate-200" />
+              <span>Visited but Unanswered</span>
             </div>
 
-            {/* Question Text */}
-            <div className="space-y-4">
-              <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100 leading-relaxed">
-                {currentQ.questionText}
-              </h3>
-              
-              {/* Question Image support */}
-              {currentQ.imageUrl && (
-                <div className="border border-slate-200 rounded-lg p-1 max-w-sm">
-                  <img src={currentQ.imageUrl} alt="Question schema display" className="rounded max-h-48 object-contain" />
-                </div>
-              )}
-            </div>
-
-            {/* Answer Selector interface */}
-            <div className="space-y-3 pt-2">
-              {/* MCQ single choice */}
-              {(currentQ.type === 'single-choice' || currentQ.type === 'true-false') && currentQ.options && (
-                <div className="grid grid-cols-1 gap-2.5">
-                  {currentQ.options.map((opt, idx) => {
-                    const isSelected = selectedAnswers[0] === String(idx);
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => setSelectedAnswers([String(idx)])}
-                        className={`w-full flex items-center gap-3 p-3.5 border rounded-xl text-left transition select-none cursor-pointer text-xs font-medium ${
-                          isSelected 
-                            ? 'border-indigo-600 bg-indigo-50/10 text-indigo-700' 
-                            : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'}`}>
-                          {isSelected && <span className="w-1.5 h-1.5 bg-white rounded-full" />}
-                        </span>
-                        <span className="font-bold font-mono">{String.fromCharCode(65 + idx)}.</span>
-                        <span className="flex-1">{opt}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* MCQ multiple choice */}
-              {currentQ.type === 'multiple-choice' && currentQ.options && (
-                <div className="grid grid-cols-1 gap-2.5">
-                  {currentQ.options.map((opt, idx) => {
-                    const sIdx = String(idx);
-                    const isSelected = selectedAnswers.includes(sIdx);
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setSelectedAnswers(prev => 
-                            isSelected ? prev.filter(a => a !== sIdx) : [...prev, sIdx]
-                          );
-                        }}
-                        className={`w-full flex items-center gap-3 p-3.5 border rounded-xl text-left transition select-none cursor-pointer text-xs font-medium ${
-                          isSelected 
-                            ? 'border-indigo-600 bg-indigo-50/10 text-indigo-700' 
-                            : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className={`w-4 h-4 border flex items-center justify-center rounded shrink-0 ${isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'}`}>
-                          {isSelected && <span className="text-[10px]">✓</span>}
-                        </span>
-                        <span className="font-bold font-mono">{String.fromCharCode(65 + idx)}.</span>
-                        <span className="flex-1">{opt}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Numerical */}
-              {currentQ.type === 'numerical' && (
-                <div className="space-y-2">
-                  <label className="block text-xs font-medium text-slate-500">Enter Your Numerical Answer</label>
-                  <input 
-                    type="number"
-                    step="any"
-                    value={selectedAnswers[0] || ''}
-                    onChange={(e) => setSelectedAnswers([e.target.value])}
-                    placeholder="Input exact decimals or digits value..."
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-600 outline-none text-slate-800 dark:text-slate-100"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Navigation Controls footer */}
-          <div className="flex justify-between items-center gap-2 pt-4 border-t border-slate-100 dark:border-slate-800 flex-wrap">
-            <div className="flex gap-2">
-              <button
-                disabled={currentIndex === 0}
-                onClick={() => setCurrentIndex(prev => prev - 1)}
-                className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 dark:border-slate-700 disabled:opacity-40 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Previous
-              </button>
-              
-              <button
-                onClick={handleMarkForReview}
-                className="flex items-center gap-1.5 px-3 py-2 border border-purple-300 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-50 cursor-pointer"
-              >
-                <Bookmark className="w-4 h-4" />
-                Mark for Review
-              </button>
-              
-              <button
-                onClick={handleClearResponse}
-                className="flex items-center gap-1.5 px-3 py-2 border border-slate-300 text-slate-500 rounded-lg text-xs font-medium hover:bg-slate-50 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-                Clear Option
-              </button>
-            </div>
-
-            <button
-              onClick={handleSaveAndNext}
-              className="flex items-center gap-1.5 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer"
-            >
-              Save & Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Right Column: Live Proctor webcam feed */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col space-y-4">
-          <h3 className="text-xs font-semibold text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
-            <Camera className="w-4 h-4 text-indigo-600" />
-            Proctoring Sentinel
-          </h3>
-
-          {/* Webcam Live display frame */}
-          <div className="w-full aspect-video bg-slate-900 rounded-lg overflow-hidden relative shadow-inner border border-slate-850">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
-              className="w-full h-full object-cover scale-x-[-1]"
-            />
-            {/* Simulated green radar sweep */}
-            <div className="absolute inset-0 border border-emerald-500/20 rounded pointer-events-none" />
-            <div className="absolute top-2 left-2 flex items-center gap-1 px-1.5 py-0.5 bg-black/60 rounded text-[9px] text-emerald-400 font-bold tracking-wider font-mono">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-              LIVE SCANNING
-            </div>
-          </div>
-
-          <div className="space-y-3 pt-2 text-xs font-medium">
-            <div className="flex justify-between items-center text-slate-500">
-              <span>Security Event warnings:</span>
-              <span className={`font-mono font-bold ${violationsCount > 1 ? 'text-rose-600 animate-bounce' : 'text-slate-700'}`}>
-                {violationsCount} / 3 Threshold
+            {/* Simulated webcam radar feed */}
+            <div className="mt-4 p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 flex flex-col items-center gap-2">
+              <span className="font-semibold text-slate-500 flex items-center gap-1">
+                <Video className="h-3 w-3 text-red-500" />
+                <span>Local Camera Sensor</span>
               </span>
-            </div>
-
-            <div className="p-3 bg-slate-50 dark:bg-slate-850/20 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 text-[10px] leading-relaxed text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Webcam feed secured</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Microphone focus active</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Page focus and tabs locked</span>
+              <div className="h-20 w-28 rounded-lg bg-black overflow-hidden relative border">
+                <video ref={videoRef} className="h-full w-full object-cover scale-x-[-1]" muted playsInline />
+                <div className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-red-600 animate-ping" />
               </div>
             </div>
           </div>
-        </div>
+        </aside>
+
+        {/* CENTER EXAM VIEWPORT */}
+        <main className="flex-1 flex flex-col justify-between bg-slate-50 dark:bg-slate-950 overflow-y-auto">
+          {currentQuestion ? (
+            <div className="p-6 max-w-3xl mx-auto w-full space-y-6 flex-1 flex flex-col justify-center">
+              
+              <div className="space-y-1">
+                <span className="font-mono text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Question {currentIdx + 1} of {questions.length} · Topic: {currentQuestion.topic}
+                </span>
+                <p className="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug">
+                  {currentQuestion.questionText}
+                </p>
+              </div>
+
+              {/* Options selectors */}
+              <div className="space-y-2.5 mt-2">
+                {currentQuestion.options && currentQuestion.options.length > 0 && (
+                  currentQuestion.options.map((opt, oIdx) => {
+                    const choiceLetter = String.fromCharCode(65 + oIdx);
+                    const isSelected = currentAnswers.includes(choiceLetter) || currentAnswers.includes(opt);
+                    const isMulti = currentQuestion.type === 'mcq_multi';
+
+                    return (
+                      <button
+                        key={oIdx}
+                        onClick={() => handleSelectAnswer(currentQuestion.id, choiceLetter, isMulti)}
+                        className={`w-full flex items-center justify-between p-3.5 rounded-xl border text-left cursor-pointer transition ${isSelected ? 'border-indigo-600 bg-indigo-50/50 text-indigo-900 dark:text-indigo-400 font-bold' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className={`h-6 w-6 rounded-lg flex items-center justify-center font-mono font-bold text-xs ${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {choiceLetter}
+                          </span>
+                          <span className="text-xs sm:text-sm font-medium">{opt}</span>
+                        </div>
+                        {isSelected && <Check className="h-4 w-4 text-indigo-600" />}
+                      </button>
+                    );
+                  })
+                )}
+
+                {/* Numerical inputs */}
+                {currentQuestion.type === 'numerical' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 font-mono mb-1 uppercase">Enter numerical response</label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="e.g. 42.15"
+                      value={currentAnswers[0] || ''}
+                      onChange={(e) => handleSelectAnswer(currentQuestion.id, e.target.value, false)}
+                      className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-2.5 text-sm font-mono font-bold focus:outline-none focus:ring-1 focus:ring-indigo-600 w-full sm:w-[240px]"
+                    />
+                  </div>
+                )}
+              </div>
+
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-slate-400 italic text-xs">
+              Exam paper is currently empty or loading...
+            </div>
+          )}
+
+          {/* BOTTOM CONTROLS FOOTER */}
+          <footer className="h-16 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 sm:px-6 flex items-center justify-between shrink-0 text-xs">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleNavigation(currentIdx - 1)}
+                disabled={currentIdx === 0}
+                className="flex items-center gap-1 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-slate-600 dark:text-slate-200 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <span>Prev</span>
+              </button>
+
+              <button
+                onClick={() => handleNavigation(currentIdx + 1)}
+                disabled={currentIdx === questions.length - 1}
+                className="flex items-center gap-1 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-slate-600 dark:text-slate-200 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+              >
+                <span>Next</span>
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleMarkReview(currentQuestion.id)}
+                className={`rounded-lg border px-3 py-2 font-semibold cursor-pointer transition ${markedForReview.includes(currentQuestion?.id) ? 'bg-amber-500 border-none text-white' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              >
+                <span>Mark for Review</span>
+              </button>
+
+              <button
+                onClick={() => handleClearChoices(currentQuestion.id)}
+                className="rounded-lg border border-red-200 px-3 py-2 font-semibold text-red-600 hover:bg-red-50 cursor-pointer"
+              >
+                <span>Clear Response</span>
+              </button>
+            </div>
+
+            <button
+              onClick={handleManualSubmit}
+              className="rounded-lg bg-indigo-600 text-white font-bold px-4 py-2 hover:bg-indigo-700 shadow cursor-pointer flex items-center gap-1"
+            >
+              <CheckSquare className="h-4 w-4" />
+              <span>Submit Assessment</span>
+            </button>
+          </footer>
+
+        </main>
       </div>
 
-      {/* Confirmation Modal */}
-      {showSubmitConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">Confirm Paper Submission</h3>
-            
-            <div className="p-4 bg-slate-50 dark:bg-slate-850/20 border rounded-xl grid grid-cols-3 gap-2 text-center text-xs">
-              <div>
-                <div className="font-bold text-emerald-600 font-mono text-base">{totalAnswered}</div>
-                <div className="text-[9px] text-slate-400">Answered</div>
-              </div>
-              <div>
-                <div className="font-bold text-amber-600 font-mono text-base">{questions.length - totalAnswered}</div>
-                <div className="text-[9px] text-slate-400">Unanswered</div>
-              </div>
-              <div>
-                <div className="font-bold text-purple-600 font-mono text-base">{totalMarked}</div>
-                <div className="text-[9px] text-slate-400">Review</div>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-normal">
-              Are you sure you want to finalize and submit your test paper? Your answers will be securely locks, graded instantly and analytics logged to teacher dashboards. This operation cannot be reversed.
-            </p>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button 
-                type="button" 
-                onClick={() => setShowSubmitConfirm(false)}
-                className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-              >
-                Continue Exam
-              </button>
-              <button 
-                type="button"
-                onClick={handleManualSubmit}
-                disabled={submitting}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer transition disabled:opacity-50"
-              >
-                {submitting ? 'Evaluating...' : 'Yes, Submit Paper'}
-              </button>
-            </div>
-          </div>
+      {/* PROCTOR LOG INCIDENT OVERLAY WARNING */}
+      {proctorWarning && (
+        <div className="fixed bottom-20 left-1/2 transform -translate-x-1/2 z-[200] rounded-xl bg-red-600 text-white font-sans px-4 py-2.5 shadow-xl text-xs flex items-center gap-2 font-bold animate-bounce">
+          <AlertTriangle className="h-4 w-4 animate-ping" />
+          <span>{proctorWarning}</span>
         </div>
       )}
+
     </div>
   );
 };

@@ -1,857 +1,943 @@
 import React, { useState, useEffect } from 'react';
-import { User, Subject, Exam, Attempt, Question, QuestionType, DifficultyType, Assignment } from '../../types';
 import { questionService } from '../../services/questionService';
 import { examService } from '../../services/examService';
-import { userService } from '../../services/userService';
 import { attemptService } from '../../services/attemptService';
-import { db } from '../../firebase/config';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { 
-  BookOpen, Plus, FileText, CheckCircle2, AlertTriangle, Play, HelpCircle, 
-  Trash2, Edit, Copy, Upload, Download, Search, CheckSquare, Eye, ArrowRight, ArrowLeft 
-} from 'lucide-react';
+import { userService } from '../../services/userService';
+import { auditService } from '../../services/auditService';
+import { User, Subject, Question, Exam, QuestionType, ExamStatus } from '../../types';
+import { Plus, Search, HelpCircle, FileSpreadsheet, Calendar, BookOpen, Trash, Award, ShieldAlert, ArrowRight, UserCheck, RefreshCw, Upload, Copy } from 'lucide-react';
 
 interface TeacherDashboardProps {
   currentUserProfile: User;
-  onNavigate: (page: string) => void;
+  onNavigate: (page: string, params?: Record<string, string>) => void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ currentUserProfile, onNavigate }) => {
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'questions' | 'exams' | 'attempts'>('dashboard');
+  
+  // Data lists
+  const [mySubjects, setMySubjects] = useState<Subject[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [students, setStudents] = useState<User[]>([]);
-
-  // Sub-tabs
-  const [activeTab, setActiveTab] = useState<'overview' | 'bank' | 'exams' | 'attempts'>('overview');
-
-  // Load States
+  const [attempts, setAttempts] = useState<any[]>([]);
+  const [studentsList, setStudentsList] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filter States
-  const [subjectFilter, setSubjectFilter] = useState('');
-  const [bankSearch, setBankSearch] = useState('');
-  const [difficultyFilter, setDifficultyFilter] = useState('');
+  // Filters & Actions
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState('');
+  const [selectedDifficultyFilter, setSelectedDifficultyFilter] = useState('');
 
-  // Question Creation Form State
+  // CSV Import State
+  const [csvText, setCsvText] = useState('');
+  const [showCsvModal, setShowCsvModal] = useState(false);
+  const [csvStatusMsg, setCsvStatusMsg] = useState('');
+
+  // Question Creator Form state
   const [showQuestionModal, setShowQuestionModal] = useState(false);
-  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
-  const [qType, setQType] = useState<QuestionType>('single-choice');
+  const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
+  
+  const [qType, setQType] = useState<QuestionType>('mcq_single');
   const [qSubjectId, setQSubjectId] = useState('');
   const [qTopic, setQTopic] = useState('');
   const [qText, setQText] = useState('');
   const [qOptions, setQOptions] = useState<string[]>(['', '', '', '']);
-  const [qCorrectAnswers, setQCorrectAnswers] = useState<string[]>(['0']);
+  const [qCorrectChoices, setQCorrectChoices] = useState<string[]>([]);
+  const [qTolerance, setQTolerance] = useState<number>(0);
   const [qMarks, setQMarks] = useState<number>(1);
   const [qNegMarks, setQNegMarks] = useState<number>(0.25);
-  const [qDifficulty, setQDifficulty] = useState<DifficultyType>('medium');
+  const [qDifficulty, setQDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [qExplanation, setQExplanation] = useState('');
 
-  // CSV Import State
-  const [showCsvModal, setShowCsvModal] = useState(false);
-  const [csvText, setCsvText] = useState('');
-  const [csvSubjectId, setCsvSubjectId] = useState('');
-  const [csvMessage, setCsvMessage] = useState('');
-
-  // Exam Wizard State
-  const [showExamWizard, setShowExamWizard] = useState(false);
-  const [wizardStep, setWizardStep] = useState(1);
-  
-  // Wizard Fields
-  const [wizardId, setWizardId] = useState('');
-  const [wizardTitle, setWizardTitle] = useState('');
-  const [wizardDesc, setWizardDesc] = useState('');
-  const [wizardInstr, setWizardInstr] = useState('');
-  const [wizardSubjectId, setWizardSubjectId] = useState('');
-  const [wizardDuration, setWizardDuration] = useState(60);
-  const [wizardStartAt, setWizardStartAt] = useState('');
-  const [wizardEndAt, setWizardEndAt] = useState('');
-  const [wizardRandomQ, setWizardRandomQ] = useState(true);
-  const [wizardRandomO, setWizardRandomO] = useState(true);
-  const [wizardAutoSubmit, setWizardAutoSubmit] = useState(true);
-  const [wizardRelease, setWizardRelease] = useState<'immediate' | 'manual'>('immediate');
-  const [wizardQIds, setWizardQIds] = useState<string[]>([]);
-  const [wizardStudentIds, setWizardStudentIds] = useState<string[]>([]);
-
-  // Subject Access limitation
-  const assignedSubjects = subjects.filter(s => 
-    currentUserProfile.role === 'admin' || currentUserProfile.subjects?.includes(s.id)
-  );
+  // Exam Creator Form state
+  const [showExamModal, setShowExamModal] = useState(false);
+  const [examName, setExamName] = useState('');
+  const [examSubjectId, setExamSubjectId] = useState('');
+  const [examDesc, setExamDesc] = useState('');
+  const [examInstructions, setExamInstructions] = useState('');
+  const [examDuration, setExamDuration] = useState<number>(30);
+  const [examStart, setExamStart] = useState('');
+  const [examEnd, setExamEnd] = useState('');
+  const [examTotalMarks, setExamTotalMarks] = useState<number>(10);
+  const [examMaxAttempts, setExamMaxAttempts] = useState<number>(1);
+  const [examRandomQuestions, setExamRandomQuestions] = useState(true);
+  const [examRandomOptions, setExamRandomOptions] = useState(false);
+  const [examAutoSubmit, setExamAutoSubmit] = useState(true);
+  const [examResultRelease, setExamResultRelease] = useState<'immediate' | 'manual'>('immediate');
+  const [examQuestionsSelected, setExamQuestionsSelected] = useState<string[]>([]);
+  const [examAssignedStudents, setExamAssignedStudents] = useState<string[]>([]);
 
   useEffect(() => {
-    // Sync with DB
-    const unsubSubjects = onSnapshot(collection(db, 'subjects'), (snap) => {
-      const list: Subject[] = [];
-      snap.forEach(d => list.push(d.data() as Subject));
-      setSubjects(list);
-    });
-
-    const unsubQuestions = onSnapshot(collection(db, 'questions'), (snap) => {
-      const list: Question[] = [];
-      snap.forEach(d => list.push(d.data() as Question));
-      setQuestions(list);
-    });
-
-    const unsubExams = onSnapshot(collection(db, 'exams'), (snap) => {
-      const list: Exam[] = [];
-      snap.forEach(d => list.push(d.data() as Exam));
-      setExams(list);
-    });
-
-    const unsubAttempts = onSnapshot(collection(db, 'attempts'), (snap) => {
-      const list: Attempt[] = [];
-      snap.forEach(d => list.push(d.data() as Attempt));
-      setAttempts(list);
-    });
-
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
-      const list: User[] = [];
-      snap.forEach(d => list.push(d.data() as User));
-      setStudents(list.filter(u => u.role === 'student' && u.active));
-      setLoading(false);
-    });
-
-    return () => {
-      unsubSubjects();
-      unsubQuestions();
-      unsubExams();
-      unsubAttempts();
-      unsubUsers();
-    };
+    fetchTeacherData();
   }, []);
 
-  // Filter bank questions to only assigned subjects
-  const filteredBank = questions.filter(q => {
-    const isSubjectAssigned = currentUserProfile.role === 'admin' || currentUserProfile.subjects?.includes(q.subjectId);
-    if (!isSubjectAssigned) return false;
-
-    const matchesSubject = !subjectFilter || q.subjectId === subjectFilter;
-    const matchesDifficulty = !difficultyFilter || q.difficulty === difficultyFilter;
-    const matchesSearch = !bankSearch || q.questionText.toLowerCase().includes(bankSearch.toLowerCase()) || q.topic?.toLowerCase().includes(bankSearch.toLowerCase());
-
-    return matchesSubject && matchesDifficulty && matchesSearch;
-  });
-
-  // Load question fields for editing
-  const handleEditQuestion = async (q: Question) => {
-    setEditingQuestionId(q.id);
-    setQSubjectId(q.subjectId);
-    setQType(q.type);
-    setQTopic(q.topic || '');
-    setQText(q.questionText);
-    setQOptions(q.options || ['', '', '', '']);
-    setQMarks(q.marks);
-    setQNegMarks(q.negativeMarks);
-    setQDifficulty(q.difficulty);
-
-    // Retrieve private correctness answers
-    const key = await questionService.getQuestionAnswerKey(q.id);
-    if (key) {
-      setQCorrectAnswers(key.correctAnswers);
-      setQExplanation(key.explanation || '');
-    }
-    setShowQuestionModal(true);
-  };
-
-  const handleCreateOrUpdateQuestion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!qSubjectId || !qText.trim()) return;
-
+  const fetchTeacherData = async () => {
+    setLoading(true);
     try {
-      if (editingQuestionId) {
-        await questionService.updateQuestion(
-          editingQuestionId,
-          {
-            subjectId: qSubjectId,
-            topic: qTopic,
-            type: qType,
-            questionText: qText,
-            options: qType === 'true-false' ? ['True', 'False'] : qOptions,
-            marks: qMarks,
-            negativeMarks: qNegMarks,
-            difficulty: qDifficulty,
-          },
-          qCorrectAnswers,
-          qExplanation
-        );
-      } else {
-        await questionService.createQuestion(
-          qSubjectId,
-          qTopic,
-          qType,
-          qText,
-          qType === 'true-false' ? ['True', 'False'] : qOptions,
-          qCorrectAnswers,
-          qMarks,
-          qNegMarks,
-          qDifficulty,
-          qExplanation,
-          currentUserProfile.uid
-        );
+      const allSubs = await userService.getAllSubjects();
+      // Filter subjects assigned to this teacher
+      const assignedSubIds = currentUserProfile.subjects || [];
+      const filteredSubs = allSubs.filter(s => assignedSubIds.includes(s.id));
+      setMySubjects(filteredSubs);
+
+      // Default question creation subject to first available assigned subject
+      if (filteredSubs.length > 0) {
+        setQSubjectId(filteredSubs[0].id);
+        setExamSubjectId(filteredSubs[0].id);
       }
 
-      // Reset
-      setEditingQuestionId(null);
-      setQTopic('');
-      setQText('');
-      setQOptions(['', '', '', '']);
-      setQCorrectAnswers(['0']);
-      setQExplanation('');
-      setShowQuestionModal(false);
+      // Load all questions and filter based on assigned subject access
+      const allQuestions = await questionService.getAllQuestions();
+      const teacherQuestions = allQuestions.filter(q => assignedSubIds.includes(q.subjectId));
+      setQuestions(teacherQuestions);
+
+      // Load exams matching assigned subjects
+      const allExams = await examService.getAllExams();
+      const teacherExams = allExams.filter(e => assignedSubIds.includes(e.subjectId));
+      setExams(teacherExams);
+
+      // Load Student list for exam assignment
+      const students = await userService.getAllUsersByRole('student');
+      setStudentsList(students);
+
+      // Load all attempts for teacher's exams
+      const allAttemptsList: any[] = [];
+      for (const ex of teacherExams) {
+        const atts = await attemptService.getAttemptsForExam(ex.id);
+        atts.forEach(a => {
+          const studentInfo = students.find(s => s.uid === a.studentId);
+          allAttemptsList.push({
+            ...a,
+            examTitle: ex.title,
+            studentName: studentInfo?.name || 'Unknown Student',
+            studentIdCode: studentInfo?.studentId || 'N/A'
+          });
+        });
+      }
+      setAttempts(allAttemptsList);
+
     } catch (err) {
       console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveQuestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    // Formulate MCQ Options & validation
+    let finalOptions: string[] | undefined = undefined;
+    let finalCorrectAnswers: string[] = [];
+
+    if (qType === 'mcq_single') {
+      finalOptions = qOptions.filter(o => o.trim() !== '');
+      if (finalOptions.length < 2) {
+        alert("Single MCQ must have at least 2 non-empty options.");
+        setLoading(false);
+        return;
+      }
+      if (qCorrectChoices.length !== 1) {
+        alert("Must choose exactly 1 correct answer.");
+        setLoading(false);
+        return;
+      }
+      finalCorrectAnswers = [qCorrectChoices[0]];
+    } else if (qType === 'mcq_multi') {
+      finalOptions = qOptions.filter(o => o.trim() !== '');
+      if (finalOptions.length < 2) {
+        alert("Multiple MCQ must have at least 2 non-empty options.");
+        setLoading(false);
+        return;
+      }
+      if (qCorrectChoices.length < 1) {
+        alert("Must select at least 1 correct answer.");
+        setLoading(false);
+        return;
+      }
+      finalCorrectAnswers = [...qCorrectChoices];
+    } else if (qType === 'true_false') {
+      finalOptions = ['True', 'False'];
+      if (qCorrectChoices.length !== 1) {
+        alert("Must select True or False.");
+        setLoading(false);
+        return;
+      }
+      finalCorrectAnswers = [qCorrectChoices[0]];
+    } else if (qType === 'numerical') {
+      if (qCorrectChoices.length !== 1 || isNaN(parseFloat(qCorrectChoices[0]))) {
+        alert("Please specify a valid numerical correct answer.");
+        setLoading(false);
+        return;
+      }
+      finalCorrectAnswers = [qCorrectChoices[0]];
+    }
+
+    try {
+      const qPayload = {
+        subjectId: qSubjectId,
+        topic: qTopic || 'General',
+        type: qType,
+        questionText: qText,
+        options: finalOptions,
+        correctAnswers: finalCorrectAnswers,
+        tolerance: qType === 'numerical' ? qTolerance : undefined,
+        marks: qMarks,
+        negativeMarks: qNegMarks,
+        difficulty: qDifficulty,
+        explanation: qExplanation || undefined,
+        createdBy: currentUserProfile.uid,
+      };
+
+      if (editingQuestion) {
+        await questionService.updateQuestion(editingQuestion.id, qPayload);
+      } else {
+        await questionService.createQuestion(qPayload);
+      }
+
+      setShowQuestionModal(false);
+      setEditingQuestion(null);
+      resetQuestionForm();
+      fetchTeacherData();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateExam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (examQuestionsSelected.length === 0) {
+      alert("Must add at least 1 question to the Exam.");
+      return;
+    }
+    setLoading(true);
+
+    try {
+      const examPayload = {
+        title: examName,
+        subjectId: examSubjectId,
+        description: examDesc,
+        instructions: examInstructions,
+        duration: examDuration,
+        startAt: examStart || new Date().toISOString(),
+        endAt: examEnd || new Date(Date.now() + 86400000).toISOString(), // next day
+        totalMarks: examTotalMarks,
+        maxAttempts: examMaxAttempts,
+        randomizeQuestions: examRandomQuestions,
+        randomizeOptions: examRandomOptions,
+        autoSubmit: examAutoSubmit,
+        resultRelease: examResultRelease,
+        status: 'active' as ExamStatus, // Auto-publish for simplicity
+        questionIds: examQuestionsSelected,
+        assignedStudentIds: examAssignedStudents,
+        createdBy: currentUserProfile.uid,
+      };
+
+      await examService.createExam(examPayload);
+      
+      await auditService.logAudit({
+        actorId: currentUserProfile.uid,
+        actorEmail: currentUserProfile.email,
+        action: 'EXAM_PUBLISHED',
+        targetId: examSubjectId,
+        metadata: `Published test: ${examName}`
+      });
+
+      setShowExamModal(false);
+      resetExamForm();
+      fetchTeacherData();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleDeleteQuestion = async (id: string) => {
-    if (confirm("Are you sure you want to delete this question?")) {
+    if (!window.confirm("Are you sure you want to delete this question? This operation is permanent.")) return;
+    try {
       await questionService.deleteQuestion(id);
-    }
-  };
-
-  const handleDuplicateQuestion = async (q: Question) => {
-    const key = await questionService.getQuestionAnswerKey(q.id);
-    await questionService.createQuestion(
-      q.subjectId,
-      `${q.topic || ''} Copy`,
-      q.type,
-      `[Copy] ${q.questionText}`,
-      q.options || [],
-      key?.correctAnswers || [],
-      q.marks,
-      q.negativeMarks,
-      q.difficulty,
-      key?.explanation || '',
-      currentUserProfile.uid
-    );
-  };
-
-  const handleCsvImport = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!csvSubjectId || !csvText.trim()) return;
-    try {
-      const res = await questionService.importQuestionsCsv(csvText, csvSubjectId, currentUserProfile.uid);
-      setCsvMessage(`Imported ${res.success} questions successfully. ${res.errors.length} errors.`);
-      if (res.errors.length > 0) {
-        setCsvMessage(prev => `${prev}\nErrors: ${res.errors.join('\n')}`);
-      }
-      setCsvText('');
-    } catch (err) {
-      setCsvMessage(`Import error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  // --- Exam Wizard Flow ---
-  const startExamWizard = () => {
-    setWizardId(`exam_${Date.now()}`);
-    setWizardTitle('');
-    setWizardDesc('');
-    setWizardInstr('');
-    setWizardSubjectId(assignedSubjects[0]?.id || '');
-    setWizardDuration(60);
-    setWizardStartAt(new Date().toISOString().slice(0, 16));
-    setWizardEndAt(new Date(Date.now() + 86400000).toISOString().slice(0, 16));
-    setWizardQIds([]);
-    setWizardStudentIds([]);
-    setWizardStep(1);
-    setShowExamWizard(true);
-  };
-
-  const handleWizardSubmit = async () => {
-    // Total marks math
-    let totalMarks = 0;
-    wizardQIds.forEach(qId => {
-      const q = questions.find(qu => qu.id === qId);
-      if (q) totalMarks += q.marks;
-    });
-
-    const examData: Omit<Exam, 'createdAt' | 'updatedAt'> = {
-      id: wizardId,
-      title: wizardTitle,
-      description: wizardDesc,
-      instructions: wizardInstr,
-      subjectId: wizardSubjectId,
-      duration: wizardDuration,
-      startAt: new Date(wizardStartAt).toISOString(),
-      endAt: new Date(wizardEndAt).toISOString(),
-      totalMarks,
-      maxAttempts: 1,
-      randomizeQuestions: wizardRandomQ,
-      randomizeOptions: wizardRandomO,
-      autoSubmit: wizardAutoSubmit,
-      resultRelease: wizardRelease,
-      status: 'draft',
-      questionIds: wizardQIds,
-      createdBy: currentUserProfile.uid
-    };
-
-    try {
-      // 1. Create Exam
-      await examService.createExam(examData);
-
-      // 2. Publish & validate
-      const pubRes = await examService.validateAndPublishExam(wizardId);
-      if (!pubRes.isValid) {
-        alert(`Validation errors: ${pubRes.errors.join(', ')}`);
-        return;
-      }
-
-      // 3. Assign to students
-      if (wizardStudentIds.length > 0) {
-        await examService.assignExamToStudents(wizardId, wizardStudentIds);
-      }
-
-      setShowExamWizard(false);
+      fetchTeacherData();
     } catch (err) {
       console.error(err);
     }
   };
 
-  const toggleWizardQuestion = (id: string) => {
-    setWizardQIds(prev => 
-      prev.includes(id) ? prev.filter(qId => qId !== id) : [...prev, id]
-    );
+  const handleDuplicateQuestion = async (q: Question) => {
+    try {
+      const copyPayload = {
+        subjectId: q.subjectId,
+        topic: `${q.topic} (Copy)`,
+        type: q.type,
+        questionText: q.questionText,
+        options: q.options,
+        correctAnswers: q.correctAnswers,
+        tolerance: q.tolerance,
+        marks: q.marks,
+        negativeMarks: q.negativeMarks,
+        difficulty: q.difficulty,
+        explanation: q.explanation,
+        createdBy: currentUserProfile.uid,
+      };
+      await questionService.createQuestion(copyPayload);
+      fetchTeacherData();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const toggleWizardStudent = (id: string) => {
-    setWizardStudentIds(prev => 
-      prev.includes(id) ? prev.filter(sId => sId !== id) : [...prev, id]
-    );
+  const handleCSVImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!csvText.trim()) return;
+    setCsvStatusMsg("Parsing lines...");
+
+    const rows = csvText.split('\n');
+    let importedCount = 0;
+    try {
+      for (const row of rows) {
+        if (!row.trim()) continue;
+        // Basic CSV splitting (format: Topic,Type,Text,Options(comma-split),CorrectAnswers(comma-split),Marks,NegMarks,Difficulty)
+        const cols = row.split(';');
+        if (cols.length < 8) continue;
+
+        const [topic, type, text, optionsStr, correctsStr, marks, negMarks, diff] = cols;
+
+        await questionService.createQuestion({
+          subjectId: qSubjectId,
+          topic: topic.trim(),
+          type: type.trim() as QuestionType,
+          questionText: text.trim(),
+          options: optionsStr.split(',').map(o => o.trim()),
+          correctAnswers: correctsStr.split(',').map(c => c.trim()),
+          marks: parseFloat(marks) || 1,
+          negativeMarks: parseFloat(negMarks) || 0.25,
+          difficulty: diff.trim() as any,
+          createdBy: currentUserProfile.uid,
+        });
+        importedCount++;
+      }
+      setCsvStatusMsg(`Successfully imported ${importedCount} questions.`);
+      setCsvText('');
+      setTimeout(() => {
+        setShowCsvModal(false);
+        setCsvStatusMsg('');
+        fetchTeacherData();
+      }, 1500);
+    } catch (err: any) {
+      setCsvStatusMsg(`Import failed: ${err.message}`);
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent"></div>
-      </div>
-    );
-  }
+  const handleEditQuestion = (q: Question) => {
+    setEditingQuestion(q);
+    setQType(q.type);
+    setQSubjectId(q.subjectId);
+    setQTopic(q.topic);
+    setQText(q.questionText);
+    setQOptions(q.options || ['', '', '', '']);
+    setQCorrectChoices(q.correctAnswers);
+    setQTolerance(q.tolerance || 0);
+    setQMarks(q.marks);
+    setQNegMarks(q.negativeMarks);
+    setQDifficulty(q.difficulty);
+    setQExplanation(q.explanation || '');
+    setShowQuestionModal(true);
+  };
+
+  const toggleExamStatus = async (examId: string, currentStatus: ExamStatus) => {
+    const nextStatusMap: Record<ExamStatus, ExamStatus> = {
+      draft: 'scheduled',
+      scheduled: 'active',
+      active: 'ended',
+      ended: 'archived',
+      archived: 'draft'
+    };
+    try {
+      await examService.updateExam(examId, { status: nextStatusMap[currentStatus] });
+      fetchTeacherData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const resetQuestionForm = () => {
+    setQTopic('');
+    setQText('');
+    setQOptions(['', '', '', '']);
+    setQCorrectChoices([]);
+    setQTolerance(0);
+    setQMarks(1);
+    setQNegMarks(0.25);
+    setQDifficulty('medium');
+    setQExplanation('');
+  };
+
+  const resetExamForm = () => {
+    setExamName('');
+    setExamDesc('');
+    setExamInstructions('');
+    setExamDuration(30);
+    setExamStart('');
+    setExamEnd('');
+    setExamTotalMarks(10);
+    setExamMaxAttempts(1);
+    setExamQuestionsSelected([]);
+    setExamAssignedStudents([]);
+  };
+
+  // Filtering Logic
+  const filteredQuestions = questions.filter(q => {
+    const matchesSearch = q.questionText.toLowerCase().includes(searchQuery.toLowerCase()) || q.topic.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSubject = selectedSubjectFilter ? q.subjectId === selectedSubjectFilter : true;
+    const matchesDiff = selectedDifficultyFilter ? q.difficulty === selectedDifficultyFilter : true;
+    return matchesSearch && matchesSubject && matchesDiff;
+  });
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      {/* Overview Cards for Teachers */}
-      {activeTab === 'overview' && (
+    <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 font-sans text-slate-900 dark:text-slate-100">
+      
+      {/* Subject Check Lock */}
+      {mySubjects.length === 0 && (
+        <div className="flex flex-col items-center justify-center rounded-2xl bg-white dark:bg-slate-900 p-12 text-center border border-slate-100 dark:border-slate-800">
+          <ShieldAlert className="h-10 w-10 text-red-500 animate-bounce mb-3" />
+          <h2 className="text-base font-bold">Access Scope Restricted</h2>
+          <p className="mt-1.5 text-xs text-slate-400 max-w-sm leading-normal">
+            You do not currently have any assigned subjects. Please contact the administrator to assign subjects to your profile before attempting question bank or exam operations.
+          </p>
+        </div>
+      )}
+
+      {mySubjects.length > 0 && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-xl shadow-xs">
-              <div className="text-slate-500 text-xs font-semibold">Total Assigned Subjects</div>
-              <div className="text-2xl font-bold text-slate-800 dark:text-slate-100 tabular-nums mt-1">
-                {assignedSubjects.length}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-xl shadow-xs">
-              <div className="text-slate-500 text-xs font-semibold">My Authored Exams</div>
-              <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 tabular-nums mt-1">
-                {exams.filter(e => e.createdBy === currentUserProfile.uid).length}
-              </div>
-            </div>
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 rounded-xl shadow-xs">
-              <div className="text-slate-500 text-xs font-semibold">Student Attempts Graded</div>
-              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums mt-1">
-                {attempts.filter(a => a.status === 'submitted' && exams.find(e => e.id === a.examId)?.createdBy === currentUserProfile.uid).length}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-start gap-4">
-            <button 
-              onClick={startExamWizard}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 cursor-pointer flex items-center gap-1.5"
+          
+          {/* Main Navigation tabs */}
+          <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-4">
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
             >
-              <Plus className="w-4 h-4" />
-              Launch CBT Exam Wizard
+              <Award className="h-3.5 w-3.5" />
+              <span>Dashboard</span>
             </button>
-            <button 
-              onClick={() => { setCsvSubjectId(assignedSubjects[0]?.id || ''); setShowCsvModal(true); }}
-              className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer flex items-center gap-1.5 text-slate-700 dark:text-slate-300"
+            <button
+              onClick={() => setActiveTab('questions')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'questions' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
             >
-              <Upload className="w-4 h-4" />
-              Import Questions (CSV)
+              <HelpCircle className="h-3.5 w-3.5" />
+              <span>Questions Bank</span>
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* Main Tab Triggers */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 gap-2 overflow-x-auto">
-        <button 
-          onClick={() => setActiveTab('overview')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer shrink-0 ${activeTab === 'overview' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-        >
-          Teacher Console
-        </button>
-        <button 
-          onClick={() => setActiveTab('bank')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer shrink-0 ${activeTab === 'bank' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-        >
-          Question Banks
-        </button>
-        <button 
-          onClick={() => setActiveTab('exams')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer shrink-0 ${activeTab === 'exams' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-        >
-          My Exams
-        </button>
-        <button 
-          onClick={() => setActiveTab('attempts')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition cursor-pointer shrink-0 ${activeTab === 'attempts' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-        >
-          Student Attempts
-        </button>
-      </div>
-
-      {/* Bank tab */}
-      {activeTab === 'bank' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs p-6 space-y-6">
-          <div className="flex justify-between items-center flex-wrap gap-4">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Author Question Bank</h3>
-              <p className="text-xs text-slate-500">Edit, duplicate, and configure single/multiple choice MCQs, true-false, or numerical tolerances.</p>
-            </div>
-            <button 
-              onClick={() => { setEditingQuestionId(null); setQSubjectId(assignedSubjects[0]?.id || ''); setShowQuestionModal(true); }}
-              className="flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-sm font-medium text-white shadow-sm cursor-pointer"
+            <button
+              onClick={() => setActiveTab('exams')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'exams' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
             >
-              <Plus className="w-4 h-4" />
-              Add Question
+              <Calendar className="h-3.5 w-3.5" />
+              <span>Manage Exams</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('attempts')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${activeTab === 'attempts' ? 'bg-indigo-600 text-white shadow' : 'hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-500'}`}
+            >
+              <UserCheck className="h-3.5 w-3.5" />
+              <span>Student Attempts ({attempts.length})</span>
             </button>
           </div>
 
-          {/* Filter Bar */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-xl">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-              <input 
-                type="text"
-                placeholder="Search question content or topic..."
-                value={bankSearch}
-                onChange={(e) => setBankSearch(e.target.value)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm dark:text-slate-100"
-              />
-            </div>
-            <select 
-              value={subjectFilter}
-              onChange={(e) => setSubjectFilter(e.target.value)}
-              className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-            >
-              <option value="">All My Subjects</option>
-              {assignedSubjects.map(sub => (
-                <option key={sub.id} value={sub.id}>{sub.name}</option>
-              ))}
-            </select>
-            <select 
-              value={difficultyFilter}
-              onChange={(e) => setDifficultyFilter(e.target.value)}
-              className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-            >
-              <option value="">All Difficulties</option>
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-          </div>
-
-          {/* Question List */}
-          <div className="space-y-4">
-            {filteredBank.map((q, idx) => {
-              const sub = subjects.find(s => s.id === q.subjectId);
-              return (
-                <div key={q.id} className="border border-slate-200 dark:border-slate-800 p-5 rounded-xl hover:shadow-xs transition bg-slate-50/20 dark:bg-slate-900/10">
-                  <div className="flex justify-between items-start gap-4">
-                    <div className="space-y-1.5 flex-1">
-                      <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                        <span>{idx + 1}. Q-ID: {q.id}</span>
-                        <span>·</span>
-                        <span className="text-indigo-600 dark:text-indigo-400 font-sans font-bold uppercase">{q.type.replace('-', ' ')}</span>
-                        <span>·</span>
-                        <span className="font-sans font-medium">{sub?.name}</span>
-                        {q.topic && (
-                          <>
-                            <span>·</span>
-                            <span className="font-sans bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-300">{q.topic}</span>
-                          </>
-                        )}
-                      </div>
-                      <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-100 leading-relaxed pt-1">
-                        {q.questionText}
-                      </h4>
-                      {q.options && q.options.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pl-2">
-                          {q.options.map((opt, oIdx) => (
-                            <div key={oIdx} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-                              <span className="font-bold">{String.fromCharCode(65 + oIdx)}.</span>
-                              <span>{opt}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0 pt-1">
-                      <span className="text-xs font-semibold px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300 uppercase">
-                        {q.difficulty}
-                      </span>
-                      <span className="text-xs font-bold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400 rounded">
-                        +{q.marks} / -{q.negativeMarks} Marks
-                      </span>
-                      <button 
-                        onClick={() => handleEditQuestion(q)}
-                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer"
-                        title="Edit"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDuplicateQuestion(q)}
-                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-500 hover:text-slate-800 cursor-pointer"
-                        title="Duplicate"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDeleteQuestion(q.id)}
-                        className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-rose-500 hover:text-rose-700 cursor-pointer"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+          {/* DASHBOARD OVERVIEW */}
+          {activeTab === 'dashboard' && (
+            <div className="space-y-6">
+              
+              {/* Stats Matrix */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Course Scope</span>
+                  <p className="mt-1 text-base font-bold text-slate-800 dark:text-slate-100 truncate">
+                    {mySubjects.map(s => s.name).join(', ')}
+                  </p>
                 </div>
-              );
-            })}
-            {filteredBank.length === 0 && (
-              <div className="py-12 text-center text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                No questions found in bank. Click Add Question to create your first query.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Exams catalog */}
-      {activeTab === 'exams' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs p-6 space-y-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Assigned Test Exam Catalog</h3>
-              <p className="text-xs text-slate-500">Exams published by you on mapped subject disciplines.</p>
-            </div>
-            <button 
-              onClick={startExamWizard}
-              className="flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-sm font-medium text-white shadow-sm cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              Launch Exam Wizard
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {exams.filter(e => e.createdBy === currentUserProfile.uid).map(e => {
-              const sub = subjects.find(s => s.id === e.subjectId);
-              return (
-                <div key={e.id} className="border border-slate-200 dark:border-slate-800 p-5 rounded-xl bg-slate-50/50 dark:bg-slate-850/20 space-y-4">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">{sub?.name}</span>
-                      <h4 className="font-semibold text-slate-800 dark:text-slate-100 text-base">{e.title}</h4>
-                    </div>
-                    <span className="px-2.5 py-0.5 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 rounded text-xs font-bold uppercase">
-                      {e.status}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 text-xs text-slate-500 font-medium">
-                    <div>Duration: <span className="font-bold text-slate-700 dark:text-slate-300">{e.duration} mins</span></div>
-                    <div>Questions: <span className="font-bold text-slate-700 dark:text-slate-300">{e.questionIds.length}</span></div>
-                    <div>Max Marks: <span className="font-bold text-slate-700 dark:text-slate-300">{e.totalMarks} Marks</span></div>
-                    <div>Release: <span className="font-bold text-slate-700 dark:text-slate-300 uppercase">{e.resultRelease}</span></div>
-                  </div>
-
-                  <div className="text-[11px] text-slate-400 font-mono">
-                    Window: {new Date(e.startAt).toLocaleString()} - {new Date(e.endAt).toLocaleString()}
-                  </div>
+                
+                <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Total Questions</span>
+                  <p className="mt-1 text-2xl font-bold font-mono text-slate-800 dark:text-slate-100">{questions.length}</p>
                 </div>
-              );
-            })}
-            {exams.filter(e => e.createdBy === currentUserProfile.uid).length === 0 && (
-              <div className="col-span-full py-12 text-center text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                No exams created yet. Use the CBT Exam Wizard to publish.
+
+                <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Created Exams</span>
+                  <p className="mt-1 text-2xl font-bold font-mono text-slate-800 dark:text-slate-100">{exams.length}</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">Assessments Taken</span>
+                  <p className="mt-1 text-2xl font-bold font-mono text-slate-800 dark:text-slate-100">{attempts.length}</p>
+                </div>
               </div>
-            )}
-          </div>
-        </div>
-      )}
 
-      {/* Student Attempts */}
-      {activeTab === 'attempts' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs p-6 space-y-6">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-800 dark:text-white">Active Student Test Attempts</h3>
-            <p className="text-xs text-slate-500">Grading center and detailed security log analysis for your authored exams.</p>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-xs font-semibold uppercase text-slate-500">
-                  <th className="py-3 px-4">Student</th>
-                  <th className="py-3 px-4">Exam</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Score</th>
-                  <th className="py-3 px-4">Accuracy</th>
-                  <th className="py-3 px-4">Violations Logged</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                {attempts.filter(a => {
-                  const exam = exams.find(e => e.id === a.examId);
-                  return exam?.createdBy === currentUserProfile.uid;
-                }).map(a => {
-                  const student = students.find(s => s.uid === a.studentId);
-                  const exam = exams.find(e => e.id === a.examId);
-                  return (
-                    <tr key={a.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 font-sans">
-                      <td className="py-3.5 px-4 font-semibold text-slate-800 dark:text-slate-200">{student?.name || a.studentId}</td>
-                      <td className="py-3.5 px-4 text-slate-500">{exam?.title || a.examId}</td>
-                      <td className="py-3.5 px-4">
-                        <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                          a.status === 'submitted' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400' : 'bg-amber-50 text-amber-700 animate-pulse'
-                        }`}>
-                          {a.status}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 font-mono font-bold">{a.score !== undefined ? `${a.score} / ${exam?.totalMarks}` : '-'}</td>
-                      <td className="py-3.5 px-4 font-mono">{a.accuracy !== undefined ? `${a.accuracy}%` : '-'}</td>
-                      <td className="py-3.5 px-4">
-                        <span className={`flex items-center gap-1 font-mono font-bold text-xs ${a.violations > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                          <AlertTriangle className="w-3.5 h-3.5" />
-                          {a.violations} Violations
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {attempts.filter(a => {
-                  const exam = exams.find(e => e.id === a.examId);
-                  return exam?.createdBy === currentUserProfile.uid;
-                }).length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-6 text-center text-slate-400">No attempts logged yet on your examinations.</td>
-                  </tr>
+              {/* Recent Student Submissions table */}
+              <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm">
+                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400 mb-4">Recent Student Submissions</h3>
+                {attempts.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-xs italic">
+                    No examination attempt reports found.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto text-xs">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
+                          <th className="py-2">Student</th>
+                          <th className="py-2">Exam Title</th>
+                          <th className="py-2">Started At</th>
+                          <th className="py-2">Status</th>
+                          <th className="py-2 text-right">Score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attempts.slice(0, 5).map(att => (
+                          <tr key={att.id} className="border-b border-slate-100 dark:border-slate-800 last:border-none">
+                            <td className="py-2.5 font-semibold">{att.studentName}</td>
+                            <td className="py-2.5">{att.examTitle}</td>
+                            <td className="py-2.5 font-mono text-[10px] text-slate-400">{new Date(att.startedAt).toLocaleString()}</td>
+                            <td className="py-2.5">
+                              <span className={`font-mono font-bold text-[9px] uppercase ${att.status === 'submitted' ? 'text-emerald-600' : 'text-amber-500'}`}>
+                                {att.status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 text-right font-mono font-bold text-indigo-600">
+                              {att.score !== undefined ? `${att.score} pts` : 'Pending'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Question Creator Modal */}
-      {showQuestionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-              {editingQuestionId ? 'Modify Question' : 'Define New Question'}
-            </h3>
-
-            {/* Simple Question Type Section Cards */}
-            {!editingQuestionId && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {[
-                  { id: 'single-choice', title: 'Single MCQ', desc: 'Select exactly 1 answer' },
-                  { id: 'multiple-choice', title: 'Multiple MCQ', desc: 'Select more than 1' },
-                  { id: 'true-false', title: 'True / False', desc: 'Binary Boolean choice' },
-                  { id: 'numerical', title: 'Numerical Answer', desc: 'Input specific number' }
-                ].map(card => (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => {
-                      setQType(card.id as QuestionType);
-                      // Clear answers to fit types
-                      if (card.id === 'true-false') setQCorrectAnswers(['true']);
-                      else if (card.id === 'numerical') setQCorrectAnswers(['0']);
-                      else setQCorrectAnswers(['0']);
-                    }}
-                    className={`p-3 border rounded-xl text-left transition cursor-pointer select-none ${qType === card.id ? 'border-indigo-600 bg-indigo-50/20' : 'border-slate-200 hover:bg-slate-50'}`}
-                  >
-                    <div className="text-xs font-bold text-slate-800 dark:text-slate-200">{card.title}</div>
-                    <div className="text-[10px] text-slate-400 leading-tight mt-1">{card.desc}</div>
-                  </button>
-                ))}
               </div>
-            )}
 
-            <form onSubmit={handleCreateOrUpdateQuestion} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Subject Domain</label>
-                  <select 
-                    value={qSubjectId} 
-                    onChange={(e) => setQSubjectId(e.target.value)}
-                    required
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+            </div>
+          )}
+
+          {/* QUESTIONS BANK MODULE */}
+          {activeTab === 'questions' && (
+            <div className="space-y-4">
+              
+              {/* Question list controls */}
+              <div className="flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search questions..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="rounded-lg border border-slate-200 dark:border-slate-800 pl-8 pr-3 py-1.5 text-xs focus:outline-none w-[180px] bg-transparent"
+                    />
+                  </div>
+
+                  <select
+                    value={selectedSubjectFilter}
+                    onChange={(e) => setSelectedSubjectFilter(e.target.value)}
+                    className="rounded-lg border border-slate-200 dark:border-slate-800 px-2 py-1.5 text-xs bg-transparent"
                   >
-                    {assignedSubjects.map(sub => (
-                      <option key={sub.id} value={sub.id}>{sub.name}</option>
-                    ))}
+                    <option value="">All Subjects</option>
+                    {mySubjects.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}
+                  </select>
+
+                  <select
+                    value={selectedDifficultyFilter}
+                    onChange={(e) => setSelectedDifficultyFilter(e.target.value)}
+                    className="rounded-lg border border-slate-200 dark:border-slate-800 px-2 py-1.5 text-xs bg-transparent"
+                  >
+                    <option value="">All Difficulties</option>
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
                   </select>
                 </div>
 
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      resetQuestionForm();
+                      setEditingQuestion(null);
+                      setShowQuestionModal(true);
+                    }}
+                    className="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-3 py-2 rounded-lg cursor-pointer"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Create Question</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowCsvModal(true)}
+                    className="flex items-center gap-1 border border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 text-xs px-3 py-2 rounded-lg cursor-pointer font-semibold"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span>CSV Import</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Questions List */}
+              {filteredQuestions.length === 0 ? (
+                <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-slate-400 text-xs italic">
+                  No questions found matching active filters.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {filteredQuestions.map(q => (
+                    <div key={q.id} className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm text-xs relative flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono font-semibold">
+                          <span>{q.subjectId} · {q.topic}</span>
+                          <span className="uppercase font-bold tracking-wider">{q.type.replace('_', ' ')}</span>
+                        </div>
+                        <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm line-clamp-3">{q.questionText}</p>
+                        
+                        {q.options && q.options.length > 0 && (
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            {q.options.map((opt, oIdx) => {
+                              const choiceLetter = String.fromCharCode(65 + oIdx);
+                              const isCorrect = q.correctAnswers.includes(choiceLetter) || q.correctAnswers.includes(opt);
+                              return (
+                                <div key={oIdx} className={`p-2 rounded border text-[11px] leading-snug ${isCorrect ? 'border-emerald-200 bg-emerald-50/20 text-emerald-800 dark:text-emerald-400' : 'border-slate-100 bg-slate-50/40'}`}>
+                                  <span className="font-bold mr-1">{choiceLetter}.</span>
+                                  <span>{opt}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {q.type === 'numerical' && (
+                          <div className="mt-2 p-2 rounded bg-slate-50 border border-slate-100 text-slate-500 font-mono text-[11px]">
+                            <span className="font-semibold text-slate-700">Correct:</span> {q.correctAnswers[0]} (tol: ±{q.tolerance})
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex justify-between items-center border-t border-slate-100 dark:border-slate-800 pt-3 mt-4 text-[10px]">
+                        <span className="font-mono text-slate-400 font-bold">Marks: {q.marks} pts (Neg: -{q.negativeMarks})</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => handleEditQuestion(q)} className="text-indigo-600 font-semibold hover:underline cursor-pointer">Edit</button>
+                          <button onClick={() => handleDuplicateQuestion(q)} className="text-emerald-600 font-semibold hover:underline cursor-pointer">Duplicate</button>
+                          <button onClick={() => handleDeleteQuestion(q.id)} className="text-red-500 font-semibold hover:underline cursor-pointer">Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* EXAM CREATION AND ASSIGNMENT */}
+          {activeTab === 'exams' && (
+            <div className="space-y-4 text-xs">
+              
+              <div className="flex justify-between items-center pb-2">
+                <h3 className="font-bold text-sm">Subject Tests</h3>
+                <button
+                  onClick={() => {
+                    resetExamForm();
+                    setShowExamModal(true);
+                  }}
+                  className="flex items-center gap-1 bg-indigo-600 text-white font-semibold px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:bg-indigo-700"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Configure Exam</span>
+                </button>
+              </div>
+
+              {exams.length === 0 ? (
+                <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-slate-400 italic">
+                  No exams created yet. Configure and publish an exam for assigned student candidates.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {exams.map(exam => (
+                    <div key={exam.id} className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3 relative">
+                      <div className="flex justify-between items-start text-slate-400 font-mono text-[10px]">
+                        <span>{exam.subjectId}</span>
+                        <span className={`font-bold px-2 py-0.5 rounded font-mono uppercase ${exam.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {exam.status}
+                        </span>
+                      </div>
+                      
+                      <div>
+                        <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm leading-snug">{exam.title}</h4>
+                        <p className="text-slate-400 text-[11px] mt-1 line-clamp-2 leading-relaxed">{exam.description || 'No description provided.'}</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-y border-slate-100 dark:border-slate-800 py-3 text-[11px] text-slate-500 font-mono leading-tight">
+                        <div>
+                          <span className="font-bold text-slate-400 block uppercase text-[9px]">Duration</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{exam.duration} minutes</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-slate-400 block uppercase text-[9px]">Questions</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{exam.questionIds?.length || 0} loaded</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-slate-400 block uppercase text-[9px]">Total Score</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{exam.totalMarks} points</span>
+                        </div>
+                        <div>
+                          <span className="font-bold text-slate-400 block uppercase text-[9px]">Randomization</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{exam.randomizeQuestions ? 'Active' : 'Disabled'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-slate-400">Attempts Max: {exam.maxAttempts}</span>
+                        <button
+                          onClick={() => toggleExamStatus(exam.id, exam.status)}
+                          className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Progress Status</span>
+                          <ArrowRight className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* ATTEMPTS MODULE */}
+          {activeTab === 'attempts' && (
+            <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-sm text-xs">
+              <h3 className="font-bold border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">Completed Exams Evaluator</h3>
+              
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-mono text-[10px] uppercase">
+                      <th className="py-2">Candidate ID</th>
+                      <th className="py-2">Candidate Name</th>
+                      <th className="py-2">Assigned Test</th>
+                      <th className="py-2">Submitted At</th>
+                      <th className="py-2 text-right">Achieved Score</th>
+                      <th className="py-2 text-right">Accuracy</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attempts.map(att => (
+                      <tr key={att.id} className="border-b border-slate-100 dark:border-slate-800 last:border-none">
+                        <td className="py-3 font-mono font-bold text-slate-700 dark:text-slate-300">{att.studentIdCode}</td>
+                        <td className="py-3 font-semibold">{att.studentName}</td>
+                        <td className="py-3 font-semibold text-indigo-600">{att.examTitle}</td>
+                        <td className="py-3 font-mono text-slate-400">{att.submittedAt ? new Date(att.submittedAt).toLocaleString() : 'Active session'}</td>
+                        <td className="py-3 text-right font-mono font-bold text-slate-850 dark:text-white">
+                          {att.score !== undefined ? `${att.score} pts` : <span className="text-amber-500 italic">Evaluating...</span>}
+                        </td>
+                        <td className="py-3 text-right font-mono text-slate-500">{att.accuracy ? `${att.accuracy}%` : 'N/A'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* QUESTION MODAL */}
+      {showQuestionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 text-xs">
+          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-900 p-6 shadow-xl border border-slate-100 dark:border-slate-800 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-sm font-bold border-b border-slate-100 dark:border-slate-800 pb-3 mb-4 text-slate-800 dark:text-white font-sans">
+              {editingQuestion ? 'Modify Question Parameters' : 'Create Subject Question'}
+            </h3>
+
+            <form onSubmit={handleSaveQuestion} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Topic</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Algebra, Electrostatics"
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Subject Scope</label>
+                  <select
+                    value={qSubjectId}
+                    onChange={(e) => setQSubjectId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2"
+                  >
+                    {mySubjects.map(s => <option key={s.id} value={s.id} className="dark:bg-slate-900">{s.name}</option>)}
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Topic / Area</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Thermodynamics"
                     value={qTopic}
                     onChange={(e) => setQTopic(e.target.value)}
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Question Prompt Text</label>
-                <textarea 
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Question Type</label>
+                <select
+                  value={qType}
+                  onChange={(e) => {
+                    setQType(e.target.value as QuestionType);
+                    setQCorrectChoices([]);
+                  }}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-semibold text-indigo-600"
+                >
+                  <option value="mcq_single" className="dark:bg-slate-900">MCQ Single Selection</option>
+                  <option value="mcq_multi" className="dark:bg-slate-900">MCQ Multiple Selections</option>
+                  <option value="true_false" className="dark:bg-slate-900">True / False</option>
+                  <option value="numerical" className="dark:bg-slate-900">Numerical Input Answer</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Question Description</label>
+                <textarea
                   required
-                  placeholder="Enter clear test question prompt..."
+                  rows={3}
+                  placeholder="Type examination question formulation here..."
                   value={qText}
                   onChange={(e) => setQText(e.target.value)}
-                  rows={3}
-                  className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-medium"
                 />
               </div>
 
-              {/* Dynamic Option Input based on Question Type */}
-              {(qType === 'single-choice' || qType === 'multiple-choice') && (
-                <div className="space-y-2">
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">Options Definition</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {qOptions.map((opt, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/20 p-2 border border-slate-200 dark:border-slate-800 rounded-lg">
-                        <span className="font-bold text-xs shrink-0">{String.fromCharCode(65 + idx)}.</span>
-                        <input 
+              {/* Dynamic Answer Fields */}
+              {(qType === 'mcq_single' || qType === 'mcq_multi') && (
+                <div className="space-y-2.5">
+                  <span className="block text-xs font-semibold text-slate-500">Option Formulations</span>
+                  {qOptions.map((opt, oIdx) => {
+                    const choiceLetter = String.fromCharCode(65 + oIdx);
+                    return (
+                      <div key={oIdx} className="flex items-center gap-2">
+                        <span className="font-bold text-slate-400 font-mono">{choiceLetter}.</span>
+                        <input
                           type="text"
                           required
+                          placeholder={`Enter option ${choiceLetter}`}
                           value={opt}
                           onChange={(e) => {
-                            const newOpts = [...qOptions];
-                            newOpts[idx] = e.target.value;
-                            setQOptions(newOpts);
+                            const updated = [...qOptions];
+                            updated[oIdx] = e.target.value;
+                            setQOptions(updated);
                           }}
-                          placeholder={`Option ${String.fromCharCode(65 + idx)}`}
-                          className="w-full bg-transparent border-none outline-none text-xs dark:text-slate-100"
+                          className="flex-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-1.5"
                         />
-                        {/* Checkboxes / Radio for correctness answers */}
-                        {qType === 'single-choice' ? (
-                          <input 
-                            type="radio" 
-                            name="correctAnswerIndex"
-                            checked={qCorrectAnswers[0] === String(idx)}
-                            onChange={() => setQCorrectAnswers([String(idx)])}
-                            className="w-4 h-4 text-indigo-600 shrink-0"
-                          />
-                        ) : (
-                          <input 
-                            type="checkbox"
-                            checked={qCorrectAnswers.includes(String(idx))}
-                            onChange={(e) => {
-                              const sIdx = String(idx);
-                              setQCorrectAnswers(prev => 
-                                e.target.checked ? [...prev, sIdx] : prev.filter(c => c !== sIdx)
-                              );
-                            }}
-                            className="w-4 h-4 text-indigo-600 shrink-0"
-                          />
-                        )}
+                        <input
+                          type={qType === 'mcq_single' ? 'radio' : 'checkbox'}
+                          name="correct_choice"
+                          checked={qCorrectChoices.includes(choiceLetter)}
+                          onChange={(e) => {
+                            if (qType === 'mcq_single') {
+                              setQCorrectChoices([choiceLetter]);
+                            } else {
+                              if (e.target.checked) {
+                                setQCorrectChoices([...qCorrectChoices, choiceLetter]);
+                              } else {
+                                setQCorrectChoices(qCorrectChoices.filter(x => x !== choiceLetter));
+                              }
+                            }
+                          }}
+                          className="accent-indigo-600 h-4 w-4 cursor-pointer"
+                        />
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
               )}
 
-              {qType === 'true-false' && (
+              {qType === 'true_false' && (
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Select Correct Answer</label>
-                  <select 
-                    value={qCorrectAnswers[0]}
-                    onChange={(e) => setQCorrectAnswers([e.target.value])}
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                  >
-                    <option value="true">True</option>
-                    <option value="false">False</option>
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1.5">Select Correct Truth Value</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQCorrectChoices(['True'])}
+                      className={`py-2 px-4 rounded-lg font-semibold border transition ${qCorrectChoices[0] === 'True' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-slate-200 text-slate-600'}`}
+                    >
+                      True
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setQCorrectChoices(['False'])}
+                      className={`py-2 px-4 rounded-lg font-semibold border transition ${qCorrectChoices[0] === 'False' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-slate-200 text-slate-600'}`}
+                    >
+                      False
+                    </button>
+                  </div>
                 </div>
               )}
 
               {qType === 'numerical' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Correct Numeric Answer</label>
-                    <input 
-                      type="number" 
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Required Number</label>
+                    <input
+                      type="number"
                       step="any"
                       required
-                      placeholder="e.g. 24.5"
-                      value={qCorrectAnswers[0]}
-                      onChange={(e) => setQCorrectAnswers([e.target.value])}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                      placeholder="e.g. 42.15"
+                      value={qCorrectChoices[0] || ''}
+                      onChange={(e) => setQCorrectChoices([e.target.value])}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono"
                     />
                   </div>
-
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Numerical Tolerance (Absolute)</label>
-                    <input 
-                      type="text" 
-                      placeholder="e.g. 0.05 (saved inside explanation)"
-                      value={qExplanation.includes('tolerance:') ? qExplanation.match(/tolerance:\s*([\d.]+)/)?.[1] || '0.01' : '0.01'}
-                      onChange={(e) => {
-                        const tol = e.target.value || '0.01';
-                        // append tolerance tag to explanation text dynamically
-                        setQExplanation(prev => {
-                          const base = prev.replace(/tolerance:\s*[\d.]+/i, '').trim();
-                          return `${base}\ntolerance: ${tol}`.trim();
-                        });
-                      }}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Allowed Tolerance (±)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="e.g. 0.05"
+                      value={qTolerance}
+                      onChange={(e) => setQTolerance(parseFloat(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono"
                     />
                   </div>
                 </div>
               )}
 
-              {/* Marks and difficulty metadata */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 dark:border-slate-800 pt-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Positive Marks</label>
-                  <input 
-                    type="number" 
-                    step="0.25"
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Assigned Marks</label>
+                  <input
+                    type="number"
                     required
+                    min="1"
                     value={qMarks}
-                    onChange={(e) => setQMarks(parseFloat(e.target.value) || 1)}
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                    onChange={(e) => setQMarks(parseInt(e.target.value) || 1)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono font-bold"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Negative Deduction Marks</label>
-                  <input 
-                    type="number" 
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Negative Marking Deduct</label>
+                  <input
+                    type="number"
                     step="0.05"
+                    min="0"
                     required
                     value={qNegMarks}
                     onChange={(e) => setQNegMarks(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Difficulty Organize Tag</label>
-                  <select 
-                    value={qDifficulty} 
-                    onChange={(e) => setQDifficulty(e.target.value as DifficultyType)}
-                    className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Difficulty</label>
+                  <select
+                    value={qDifficulty}
+                    onChange={(e) => setQDifficulty(e.target.value as any)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-semibold"
                   >
                     <option value="easy">Easy</option>
                     <option value="medium">Medium</option>
@@ -861,29 +947,29 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ currentUserP
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Explanation (Visible after release)</label>
-                <textarea 
-                  placeholder="Explain solution or key criteria details..."
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Explanatory Solution (Optional)</label>
+                <textarea
+                  placeholder="Enter dynamic formulas or proof explanation here..."
+                  rows={2}
                   value={qExplanation}
                   onChange={(e) => setQExplanation(e.target.value)}
-                  rows={2}
-                  className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 text-[11px]"
                 />
               </div>
 
-              <div className="flex justify-end gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-                <button 
-                  type="button" 
+              <div className="flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
+                <button
+                  type="button"
                   onClick={() => setShowQuestionModal(false)}
-                  className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
-                <button 
+                <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium cursor-pointer"
+                  className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white shadow hover:bg-indigo-700 cursor-pointer"
                 >
-                  {editingQuestionId ? 'Save Edits' : 'Save Question'}
+                  Save Question
                 </button>
               </div>
             </form>
@@ -891,58 +977,58 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ currentUserP
         </div>
       )}
 
-      {/* CSV Import Modal */}
+      {/* CSV IMPORT MODAL */}
       {showCsvModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Import Questions via CSV</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 text-xs">
+          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-900 p-6 shadow-xl border border-slate-100 dark:border-slate-800">
+            <h3 className="text-sm font-bold border-b border-slate-100 dark:border-slate-800 pb-3 mb-3">Batch CSV Question Import</h3>
             
-            <form onSubmit={handleCsvImport} className="space-y-4">
+            <form onSubmit={handleCSVImport} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Destination Subject</label>
-                <select 
-                  value={csvSubjectId}
-                  onChange={(e) => setCsvSubjectId(e.target.value)}
-                  required
-                  className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Select Subject Target</label>
+                <select
+                  value={qSubjectId}
+                  onChange={(e) => setQSubjectId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-semibold text-indigo-600"
                 >
-                  {assignedSubjects.map(sub => (
-                    <option key={sub.id} value={sub.id}>{sub.name}</option>
-                  ))}
+                  {mySubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Paste CSV Lines</label>
-                <textarea 
+                <label className="block text-xs font-semibold text-slate-500 mb-1">CSV Raw Data</label>
+                <textarea
                   required
-                  placeholder='QuestionText,Type,Options(split by "|"),CorrectAnswers(split by "|"),Marks,NegativeMarks,Difficulty,Topic,Explanation&#10;"What is 2+2?","single-choice","3|4|5|6","1",1,0.25,"easy","Arithmetic","Standard addition"'
+                  rows={8}
+                  placeholder="Topic;Type;Text;Options(comma);CorrectAnswers(comma);Marks;NegMarks;Difficulty&#10;Physics;mcq_single;What is sound?;Wave,Solid,Light,None;Wave;1;0.25;easy"
                   value={csvText}
                   onChange={(e) => setCsvText(e.target.value)}
-                  rows={6}
-                  className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-xs font-mono dark:text-slate-100"
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent p-3 font-mono text-[10px] whitespace-pre"
                 />
+                <span className="block text-[10px] text-slate-400 mt-1 leading-normal">
+                  Provide fields split by semicolons <strong>(;)</strong>. Options and answer choices split by commas <strong>(,)</strong>. Refer to placeholder for schema matching.
+                </span>
               </div>
 
-              {csvMessage && (
-                <div className="p-3 bg-indigo-50 dark:bg-slate-800 border border-indigo-100 rounded-lg text-xs text-indigo-700 whitespace-pre-line max-h-32 overflow-y-auto font-mono">
-                  {csvMessage}
+              {csvStatusMsg && (
+                <div className="p-2.5 rounded bg-slate-50 font-mono text-[10px] font-semibold border text-indigo-600">
+                  {csvStatusMsg}
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 pt-2">
-                <button 
-                  type="button" 
-                  onClick={() => { setShowCsvModal(false); setCsvMessage(''); }}
-                  className="px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              <div className="flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCsvModal(false)}
+                  className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
                 >
                   Close
                 </button>
-                <button 
+                <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium cursor-pointer"
+                  className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white shadow hover:bg-indigo-700 cursor-pointer"
                 >
-                  Execute CSV Parse
+                  Execute Batch Import
                 </button>
               </div>
             </form>
@@ -950,279 +1036,174 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ currentUserP
         </div>
       )}
 
-      {/* Multi-Step Exam Wizard Modal */}
-      {showExamWizard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">CBT Exam Setup Wizard</h3>
-                <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono font-bold uppercase">Step {wizardStep} of 6</span>
+      {/* EXAM CREATION MODAL */}
+      {showExamModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 text-xs">
+          <div className="w-full max-w-lg rounded-xl bg-white dark:bg-slate-900 p-6 shadow-xl border border-slate-100 dark:border-slate-800 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-sm font-bold border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">Configure CBT Assessment</h3>
+            
+            <form onSubmit={handleCreateExam} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Assigned Subject</label>
+                  <select
+                    value={examSubjectId}
+                    onChange={(e) => setExamSubjectId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-semibold"
+                  >
+                    {mySubjects.map(s => <option key={s.id} value={s.id} className="dark:bg-slate-900">{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Assessment Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Midterm General Physics"
+                    value={examName}
+                    onChange={(e) => setExamName(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-semibold"
+                  />
+                </div>
               </div>
-              <button onClick={() => setShowExamWizard(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer text-sm">Cancel</button>
-            </div>
 
-            {/* Step Indicators */}
-            <div className="flex justify-between gap-1 select-none text-[10px] text-slate-400 uppercase font-mono tracking-tight font-bold border-b border-slate-100 dark:border-slate-800 pb-2">
-              <span className={wizardStep >= 1 ? 'text-indigo-600' : ''}>1. Info</span>
-              <span className={wizardStep >= 2 ? 'text-indigo-600' : ''}>2. Settings</span>
-              <span className={wizardStep >= 3 ? 'text-indigo-600' : ''}>3. Questions</span>
-              <span className={wizardStep >= 4 ? 'text-indigo-600' : ''}>4. Roster</span>
-              <span className={wizardStep >= 5 ? 'text-indigo-600' : ''}>5. Preview</span>
-              <span className={wizardStep >= 6 ? 'text-indigo-600' : ''}>6. Publish</span>
-            </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Assessment Purpose</label>
+                <textarea
+                  rows={2}
+                  placeholder="Brief exam summary..."
+                  value={examDesc}
+                  onChange={(e) => setExamDesc(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2"
+                />
+              </div>
 
-            {/* Step Content */}
-            <div className="min-h-[250px] py-2">
-              {wizardStep === 1 && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Exam Name / Title</label>
-                    <input 
-                      type="text" 
-                      required
-                      placeholder="e.g. Midterm General Physics I"
-                      value={wizardTitle}
-                      onChange={(e) => setWizardTitle(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Subject Category Domain</label>
-                    <select 
-                      value={wizardSubjectId}
-                      onChange={(e) => setWizardSubjectId(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                    >
-                      {assignedSubjects.map(sub => (
-                        <option key={sub.id} value={sub.id}>{sub.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Description</label>
-                    <textarea 
-                      placeholder="Enter a brief summary of exam coverage topics..."
-                      value={wizardDesc}
-                      onChange={(e) => setWizardDesc(e.target.value)}
-                      rows={2}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Student Guidelines / Instructions</label>
-                    <textarea 
-                      placeholder="Enter detailed guidelines (e.g. webcam, camera, mic and fullscreen specifications)"
-                      value={wizardInstr}
-                      onChange={(e) => setWizardInstr(e.target.value)}
-                      rows={3}
-                      className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                    />
-                  </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">Proctoring Instructions</label>
+                <textarea
+                  rows={2}
+                  placeholder="Candidates will have fullscreen locked..."
+                  value={examInstructions}
+                  onChange={(e) => setExamInstructions(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Time Limit (mins)</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={examDuration}
+                    onChange={(e) => setExamDuration(parseInt(e.target.value) || 30)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono font-bold text-center"
+                  />
                 </div>
-              )}
-
-              {wizardStep === 2 && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">CBT Duration (Minutes)</label>
-                      <input 
-                        type="number" 
-                        required
-                        value={wizardDuration}
-                        onChange={(e) => setWizardDuration(parseInt(e.target.value) || 30)}
-                        className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Result Release Mode</label>
-                      <select 
-                        value={wizardRelease}
-                        onChange={(e) => setWizardRelease(e.target.value as 'immediate' | 'manual')}
-                        className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                      >
-                        <option value="immediate">Immediate Release</option>
-                        <option value="manual">Manual Release Later</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Window Starts On</label>
-                      <input 
-                        type="datetime-local" 
-                        required
-                        value={wizardStartAt}
-                        onChange={(e) => setWizardStartAt(e.target.value)}
-                        className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1.5">Window Ends On</label>
-                      <input 
-                        type="datetime-local" 
-                        required
-                        value={wizardEndAt}
-                        onChange={(e) => setWizardEndAt(e.target.value)}
-                        className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm dark:text-slate-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 bg-slate-50 dark:bg-slate-800/30 p-4 border border-slate-200 dark:border-slate-800 rounded-lg text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">Randomize Question Order per Attempt</span>
-                      <input 
-                        type="checkbox" 
-                        checked={wizardRandomQ}
-                        onChange={(e) => setWizardRandomQ(e.target.checked)}
-                        className="w-4 h-4 text-indigo-600 cursor-pointer"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">Randomize MCQ Options per Question</span>
-                      <input 
-                        type="checkbox" 
-                        checked={wizardRandomO}
-                        onChange={(e) => setWizardRandomO(e.target.checked)}
-                        className="w-4 h-4 text-indigo-600 cursor-pointer"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-700 dark:text-slate-300">Force Auto-Submit when Timer Hits 0</span>
-                      <input 
-                        type="checkbox" 
-                        checked={wizardAutoSubmit}
-                        onChange={(e) => setWizardAutoSubmit(e.target.checked)}
-                        className="w-4 h-4 text-indigo-600 cursor-pointer"
-                      />
-                    </div>
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Total Score Pts</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={examTotalMarks}
+                    onChange={(e) => setExamTotalMarks(parseInt(e.target.value) || 10)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono font-bold text-center"
+                  />
                 </div>
-              )}
-
-              {wizardStep === 3 && (
-                <div className="space-y-4">
-                  <div className="text-xs text-slate-500 font-semibold mb-2">
-                    Selected Questions ({wizardQIds.length} of {questions.filter(q => q.subjectId === wizardSubjectId).length} available for Subject)
-                  </div>
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
-                    {questions.filter(q => q.subjectId === wizardSubjectId).map(q => (
-                      <div key={q.id} className="p-3 flex items-start gap-3 text-xs">
-                        <input 
-                          type="checkbox" 
-                          checked={wizardQIds.includes(q.id)}
-                          onChange={() => toggleWizardQuestion(q.id)}
-                          className="w-4 h-4 text-indigo-600 cursor-pointer shrink-0 mt-0.5"
-                        />
-                        <div className="flex-1">
-                          <div className="font-bold text-slate-800 dark:text-slate-200 line-clamp-2">{q.questionText}</div>
-                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">Topic: {q.topic} | Marks: +{q.marks} | Difficulty: {q.difficulty}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {questions.filter(q => q.subjectId === wizardSubjectId).length === 0 && (
-                      <div className="p-6 text-center text-slate-400">No questions found in the bank for this subject. Create questions in the question bank first.</div>
-                    )}
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">Attempts Permitted</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={examMaxAttempts}
+                    onChange={(e) => setExamMaxAttempts(parseInt(e.target.value) || 1)}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent px-3 py-2 font-mono text-center"
+                  />
                 </div>
-              )}
+              </div>
 
-              {wizardStep === 4 && (
-                <div className="space-y-4">
-                  <div className="text-xs text-slate-500 font-semibold mb-2">
-                    Assign Students ({wizardStudentIds.length} Selected)
-                  </div>
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-56 overflow-y-auto">
-                    {students.map(st => (
-                      <div key={st.uid} className="p-3 flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="checkbox" 
-                            checked={wizardStudentIds.includes(st.uid)}
-                            onChange={() => toggleWizardStudent(st.uid)}
-                            className="w-4 h-4 text-indigo-600 cursor-pointer shrink-0"
+              {/* Select Question bank items */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Load Test Paper Questions ({examQuestionsSelected.length} loaded)</label>
+                <div className="space-y-2 max-h-[160px] overflow-y-auto border border-slate-100 dark:border-slate-800 rounded-lg p-3">
+                  {questions
+                    .filter(q => q.subjectId === examSubjectId)
+                    .map(q => {
+                      const isSelected = examQuestionsSelected.includes(q.id);
+                      return (
+                        <label key={q.id} className="flex items-start gap-2.5 cursor-pointer font-medium p-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 rounded">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setExamQuestionsSelected([...examQuestionsSelected, q.id]);
+                              } else {
+                                setExamQuestionsSelected(examQuestionsSelected.filter(id => id !== q.id));
+                              }
+                            }}
+                            className="accent-indigo-600 mt-0.5"
                           />
-                          <div>
-                            <span className="font-bold text-slate-800 dark:text-slate-200">{st.name}</span>
-                            <span className="text-[10px] text-slate-400 ml-2 font-mono">ID: {st.studentId}</span>
+                          <div className="leading-tight">
+                            <span className="font-bold text-slate-700 dark:text-slate-300 block line-clamp-1">{q.questionText}</span>
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">Topic: {q.topic} | Marks: {q.marks} pts</span>
                           </div>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">{st.email}</span>
-                      </div>
-                    ))}
-                    {students.length === 0 && (
-                      <div className="p-6 text-center text-slate-400">No active students found in the roster.</div>
-                    )}
-                  </div>
+                        </label>
+                      );
+                    })}
                 </div>
-              )}
+              </div>
 
-              {wizardStep === 5 && (
-                <div className="space-y-4 text-xs font-medium text-slate-600 dark:text-slate-300">
-                  <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 mb-2">Review CBT Exam Template</h4>
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2 bg-slate-50 dark:bg-slate-850/20">
-                    <div>Exam: <span className="font-bold text-slate-800 dark:text-slate-200">{wizardTitle || 'No Title'}</span></div>
-                    <div>Subject: <span className="font-bold text-slate-800 dark:text-slate-200">{subjects.find(s => s.id === wizardSubjectId)?.name}</span></div>
-                    <div>Duration: <span className="font-bold text-slate-800 dark:text-slate-200">{wizardDuration} Minutes</span></div>
-                    <div>Window: <span className="font-mono text-slate-800 dark:text-slate-200">{new Date(wizardStartAt).toLocaleString()} - {new Date(wizardEndAt).toLocaleString()}</span></div>
-                    <div>Questions Picked: <span className="font-bold text-indigo-600 dark:text-indigo-400">{wizardQIds.length} Questions</span></div>
-                    <div>Students Targeted: <span className="font-bold text-indigo-600 dark:text-indigo-400">{wizardStudentIds.length} Students</span></div>
-                  </div>
+              {/* Assignment Students selection */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5">Assign Candidates (Optional - Leave blank for everyone)</label>
+                <div className="space-y-2 max-h-[120px] overflow-y-auto border border-slate-100 dark:border-slate-800 rounded-lg p-2.5">
+                  {studentsList.map(s => {
+                    const isSelected = examAssignedStudents.includes(s.uid);
+                    return (
+                      <label key={s.uid} className="flex items-center gap-2 cursor-pointer font-medium p-1 hover:bg-slate-50 rounded">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setExamAssignedStudents([...examAssignedStudents, s.uid]);
+                            } else {
+                              setExamAssignedStudents(examAssignedStudents.filter(id => id !== s.uid));
+                            }
+                          }}
+                          className="accent-indigo-600"
+                        />
+                        <span>{s.name} ({s.studentId || 'N/A'})</span>
+                      </label>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
 
-              {wizardStep === 6 && (
-                <div className="space-y-4 text-center py-6">
-                  <CheckSquare className="w-12 h-12 text-indigo-600 mx-auto" />
-                  <div>
-                    <h4 className="font-bold text-slate-800 dark:text-slate-100 text-base">CBT Exam Template Verified</h4>
-                    <p className="text-xs text-slate-500 mt-2">Publishing will seal the exam configurations, trigger dynamic student assignments and render them accessible inside the student terminal window.</p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Navigation controls */}
-            <div className="flex justify-between items-center pt-4 border-t border-slate-200 dark:border-slate-800">
-              <button
-                type="button"
-                disabled={wizardStep === 1}
-                onClick={() => setWizardStep(prev => prev - 1)}
-                className="flex items-center gap-1.5 px-4 py-2 border border-slate-300 dark:border-slate-700 disabled:opacity-50 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-800 transition cursor-pointer"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Previous
-              </button>
-              
-              {wizardStep < 6 ? (
+              <div className="flex justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    if (wizardStep === 1 && !wizardTitle.trim()) { alert('Exam title required'); return; }
-                    if (wizardStep === 3 && wizardQIds.length === 0) { alert('Select at least 1 question'); return; }
-                    setWizardStep(prev => prev + 1);
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition cursor-pointer"
+                  onClick={() => setShowExamModal(false)}
+                  className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
                 >
-                  Next
-                  <ArrowRight className="w-4 h-4" />
+                  Cancel
                 </button>
-              ) : (
                 <button
-                  type="button"
-                  onClick={handleWizardSubmit}
-                  className="flex items-center gap-1.5 px-5 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 shadow-sm transition cursor-pointer"
+                  type="submit"
+                  className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white shadow hover:bg-indigo-700 cursor-pointer"
                 >
-                  Verify & Publish Exam
+                  Publish and Open CBT
                 </button>
-              )}
-            </div>
+              </div>
+            </form>
           </div>
         </div>
       )}
+
     </div>
   );
 };

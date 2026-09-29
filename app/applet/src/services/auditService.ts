@@ -1,28 +1,36 @@
-import { collection, doc, setDoc } from 'firebase/firestore';
-import { db, auth } from '../firebase/config';
-import { handleFirestoreError, OperationType } from './dbService';
+import { doc, setDoc, collection, getDocs, query, orderBy, limit, getDoc, serverTimestamp } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../firebase/config';
 import { AuditLog } from '../types';
 
 export const auditService = {
-  async log(action: string, targetId?: string, metadata?: Record<string, any>): Promise<void> {
-    const user = auth.currentUser;
-    const path = 'auditLogs';
-    const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    
-    const logEntry: AuditLog = {
-      id: logId,
-      actorId: user?.uid || 'anonymous_system',
-      actorEmail: user?.email || 'system',
-      action,
-      timestamp: new Date().toISOString(),
-      targetId,
-      metadata
-    };
-
+  async logAudit(log: Omit<AuditLog, 'id' | 'timestamp'>): Promise<AuditLog> {
+    const id = `audit_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+    const path = `auditLogs/${id}`;
     try {
-      await setDoc(doc(collection(db, path), logId), logEntry);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `${path}/${logId}`);
+      const fullLog: AuditLog = {
+        ...log,
+        id,
+        timestamp: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'auditLogs', id), fullLog);
+      return fullLog;
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.CREATE, path);
+    }
+  },
+
+  async getAllAuditLogs(): Promise<AuditLog[]> {
+    const path = 'auditLogs';
+    try {
+      const snap = await getDocs(collection(db, 'auditLogs'));
+      const list: AuditLog[] = [];
+      snap.forEach((d) => {
+        list.push(d.data() as AuditLog);
+      });
+      // Sort by timestamp desc
+      return list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    } catch (error) {
+      return handleFirestoreError(error, OperationType.LIST, path);
     }
   }
 };

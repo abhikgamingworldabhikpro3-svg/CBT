@@ -1,27 +1,22 @@
 import React from 'react';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
-import { Wifi, WifiOff } from 'lucide-react';
+import { WifiOff, Wifi } from 'lucide-react';
 
 export const OfflineIndicator: React.FC = () => {
   const isOnline = useOnlineStatus();
 
   return (
-    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all duration-300 ${
+    <div className={`fixed bottom-4 left-4 z-50 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold shadow-lg transition-all duration-300 ${
       isOnline 
-        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-400' 
-        : 'bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400 animate-pulse'
+        ? 'bg-emerald-600 text-white translate-y-12 opacity-0 pointer-events-none' 
+        : 'bg-amber-600 text-white translate-y-0 opacity-100'
     }`}>
       {isOnline ? (
-        <>
-          <Wifi className="w-3.5 h-3.5" />
-          <span>Connected</span>
-        </>
+        <Wifi className="h-3.5 w-3.5 text-white animate-pulse" />
       ) : (
-        <>
-          <WifiOff className="w-3.5 h-3.5" />
-          <span>Offline (Saved Locally)</span>
-        </>
+        <WifiOff className="h-3.5 w-3.5 text-white animate-bounce" />
       )}
+      <span>{isOnline ? "Connected to Proctor Server" : "Offline Mode — Saved answers cached locally"}</span>
     </div>
   );
 };

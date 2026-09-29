@@ -1,171 +1,269 @@
 import React, { useState } from 'react';
 import { auth, db } from '../firebase/config';
-import { 
-  signInWithPopup, GoogleAuthProvider, 
-  signInWithEmailAndPassword, createUserWithEmailAndPassword 
-} from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { userService } from '../services/userService';
-import { Shield, Sparkles, AlertCircle, KeyRound, Mail, UserCheck } from 'lucide-react';
+import { Shield, Lock, Mail, Users, CheckCircle, GraduationCap } from 'lucide-react';
+import { auditService } from '../services/auditService';
 
 interface LoginProps {
   onLoginSuccess: () => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-  const [emailInput, setEmailInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [registerRole, setRegisterRole] = useState<'teacher' | 'student'>('student');
+  const [registerName, setRegisterName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMessage] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleGoogleSignIn = async () => {
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLoading(true);
-    setErrorMessage(null);
-    const provider = new GoogleAuthProvider();
+    setErrorMsg('');
 
     try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
+      if (isRegisterMode) {
+        // Enforce validations
+        if (!registerName) throw new Error("Full Name is required.");
+        const userCred = await createUserWithEmailAndPassword(auth, email, password);
+        
+        // Generate additional fields
+        const extraFields: any = {};
+        if (registerRole === 'student') {
+          extraFields.studentId = `STU_${Math.floor(100000 + Math.random() * 900000)}`;
+        } else {
+          extraFields.subjects = [];
+        }
 
-      // Check if profile exists, otherwise create as student or bootstrapped admin
-      const profile = await userService.getUserProfile(user.uid);
-      if (!profile) {
-        const isBootstrappedAdmin = user.email === "abhikgamingworldabhikpro3@gmail.com";
-        const role = isBootstrappedAdmin ? 'admin' : 'student';
-        await userService.createUserProfile(user.uid, user.displayName || 'Google Student', user.email || '', role);
+        await userService.createUserProfile(userCred.user.uid, registerName, email, registerRole, extraFields);
+        await auditService.logAudit({
+          actorId: userCred.user.uid,
+          actorEmail: email,
+          action: registerRole === 'student' ? 'STUDENT_CREATED' : 'TEACHER_CREATED',
+          targetId: userCred.user.uid,
+          metadata: `Created user with email ${email}`
+        });
+      } else {
+        const userCred = await signInWithEmailAndPassword(auth, email, password);
+        await auditService.logAudit({
+          actorId: userCred.user.uid,
+          actorEmail: email,
+          action: 'ADMIN_LOGIN',
+          targetId: userCred.user.uid,
+          metadata: `User logged in with email ${email}`
+        });
       }
       onLoginSuccess();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setErrorMessage("Google Sign-In failed. Please verify that popup blockers are disabled.");
+      setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDemoSignIn = async (role: 'admin' | 'teacher' | 'student') => {
+  const handleGoogleAuth = async () => {
     setLoading(true);
-    setErrorMessage(null);
-
-    // Pre-configured email credentials for the demo accounts
-    const email = `${role}@example.com`;
-    const password = 'PasswordDemo123!';
-    const name = `Demo ${role.toUpperCase()}`;
-
+    setErrorMsg('');
     try {
-      // 1. Try to sign in with email/password
-      const userCred = await signInWithEmailAndPassword(auth, email, password);
+      const provider = new GoogleAuthProvider();
+      const userCred = await signInWithPopup(auth, provider);
       onLoginSuccess();
     } catch (err: any) {
-      // 2. If user doesn't exist, automatically sign them up for the demo reviewer!
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        try {
-          const userCred = await createUserWithEmailAndPassword(auth, email, password);
-          const user = userCred.user;
-          // Seed the user profile in Firestore!
-          await userService.createUserProfile(
-            user.uid, 
-            name, 
-            email, 
-            role, 
-            role === 'student' ? 'STU-DEMO-99' : undefined
-          );
-          onLoginSuccess();
-        } catch (signUpErr: any) {
-          console.error(signUpErr);
-          setErrorMessage(`Demo creation error: ${signUpErr.message}`);
+      console.error(err);
+      setErrorMsg(err.message || 'Google Login pop-up was interrupted.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // IMMEDIATE TEST EVALUATOR SEED CARD PRESETS
+  const handleLoadDemoUser = async (role: 'admin' | 'teacher' | 'student') => {
+    setLoading(true);
+    setErrorMsg('');
+    
+    // Preset addresses
+    const demoEmail = `${role}@example.com`;
+    const demoPassword = `demo_${role}_123`;
+    const demoName = role === 'admin' ? 'Super Admin' : role === 'teacher' ? 'Physics Tutor A' : 'Candidate John';
+
+    try {
+      // 1. Try signing in
+      let userCred;
+      try {
+        userCred = await signInWithEmailAndPassword(auth, demoEmail, demoPassword);
+      } catch (e) {
+        // 2. If user doesn't exist, register them immediately
+        userCred = await createUserWithEmailAndPassword(auth, demoEmail, demoPassword);
+        
+        const extraFields: any = {};
+        if (role === 'student') {
+          extraFields.studentId = 'STU_100204';
+        } else if (role === 'teacher') {
+          extraFields.subjects = ['PHYS_101', 'MATH_101'];
         }
-      } else {
-        console.error(err);
-        setErrorMessage(`Sign in failed: ${err.message}`);
+
+        await userService.createUserProfile(
+          userCred.user.uid, 
+          demoName, 
+          demoEmail, 
+          role,
+          extraFields
+        );
       }
+      onLoginSuccess();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(`Failed seeding user: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-xl space-y-6">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950 p-4 font-sans">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 shadow-xl p-8">
         
-        {/* Brand Lockup */}
-        <div className="text-center space-y-2">
-          <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-            <Shield className="w-6 h-6" />
+        {/* Branding header */}
+        <div className="flex flex-col items-center text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-lg mb-4">
+            <GraduationCap className="h-6 w-6" />
           </div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-800 dark:text-slate-100">CBT Exam Room</h2>
-          <p className="text-xs text-slate-500">Computer Based Test Online Proctored Portal</p>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white">CBT Examination Portal</h2>
+          <p className="mt-1.5 text-xs text-slate-500 font-mono tracking-tight">Active Proctor Surveillance & AI Grading Room</p>
         </div>
 
         {errorMsg && (
-          <div className="p-3.5 bg-rose-50 rounded-xl flex gap-2 text-rose-800 border border-rose-100 text-xs font-medium">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{errorMsg}</span>
+          <div className="mt-6 rounded-lg bg-red-50 dark:bg-red-950/20 p-3 text-xs text-red-600 dark:text-red-400 border border-red-100 dark:border-red-950">
+            {errorMsg}
           </div>
         )}
 
-        {/* Action Button: Google Sign-In */}
-        <div className="space-y-3">
+        {/* Input form */}
+        <form onSubmit={handleEmailAuth} className="mt-6 space-y-4">
+          {isRegisterMode && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Full Name</label>
+              <div className="relative mt-1">
+                <Users className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  required
+                  value={registerName}
+                  onChange={(e) => setRegisterName(e.target.value)}
+                  placeholder="Enter full name"
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Email Address</label>
+            <div className="relative mt-1">
+              <Mail className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="email@example.com"
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-600"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Password</label>
+            <div className="relative mt-1">
+              <Lock className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent pl-9 pr-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-600"
+              />
+            </div>
+          </div>
+
+          {isRegisterMode && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Select Role Type</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRegisterRole('student')}
+                  className={`py-1.5 px-3 rounded-lg text-xs font-semibold border transition ${registerRole === 'student' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-slate-200 dark:border-slate-800 text-slate-600'}`}
+                >
+                  Student Candidate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRegisterRole('teacher')}
+                  className={`py-1.5 px-3 rounded-lg text-xs font-semibold border transition ${registerRole === 'teacher' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-600' : 'border-slate-200 dark:border-slate-800 text-slate-600'}`}
+                >
+                  Subject Instructor
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
-            onClick={handleGoogleSignIn}
+            type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2.5 py-3 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 transition cursor-pointer disabled:opacity-50"
+            className="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-indigo-700 transition disabled:opacity-50 cursor-pointer"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-            </svg>
-            Sign in with Google Account
+            {loading ? 'Authenticating...' : isRegisterMode ? 'Create Account' : 'Secure Login'}
+          </button>
+        </form>
+
+        <div className="relative my-6 text-center">
+          <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-100 dark:border-slate-800" /></div>
+          <span className="relative bg-white dark:bg-slate-900 px-3 text-[10px] uppercase font-mono text-slate-400">Instant Test Evaluators</span>
+        </div>
+
+        {/* DEMO ACCOUNTS QUICK DIRECT LOG-INS */}
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            onClick={() => handleLoadDemoUser('student')}
+            className="flex flex-col items-center py-2 px-1 rounded-xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+          >
+            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 font-mono">STUDENT</span>
+            <span className="text-[9px] text-slate-400 mt-0.5">Demo Candidate</span>
+          </button>
+          
+          <button
+            onClick={() => handleLoadDemoUser('teacher')}
+            className="flex flex-col items-center py-2 px-1 rounded-xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+          >
+            <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 font-mono">TEACHER</span>
+            <span className="text-[9px] text-slate-400 mt-0.5">Demo Instructor</span>
+          </button>
+
+          <button
+            onClick={() => handleLoadDemoUser('admin')}
+            className="flex flex-col items-center py-2 px-1 rounded-xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
+          >
+            <span className="text-[10px] font-bold text-red-600 dark:text-red-400 font-mono">ADMIN</span>
+            <span className="text-[9px] text-slate-400 mt-0.5">Super Admin</span>
           </button>
         </div>
 
-        {/* Separator */}
-        <div className="relative flex py-1 items-center">
-          <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
-          <span className="flex-shrink mx-4 text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Review Demo Core Controls</span>
-          <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+        {/* Toggle sign in mode */}
+        <div className="mt-6 text-center text-xs">
+          <button
+            type="button"
+            onClick={() => setIsRegisterMode(!isRegisterMode)}
+            className="text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+          >
+            {isRegisterMode ? 'Already have credentials? Sign In' : "Don't have credentials? Create Account"}
+          </button>
         </div>
 
-        {/* Reviewer / Evaluator Demonstration controls */}
-        <div className="space-y-2 bg-slate-50 dark:bg-slate-900/50 p-4 border border-slate-200 dark:border-slate-800 rounded-2xl">
-          <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest flex items-center gap-1 font-mono">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-            Instant Seeder Logins
-          </div>
-          <p className="text-[10px] text-slate-500 leading-normal">
-            Click any button below to automatically generate, seed, and log into a fully configured template account in the database.
-          </p>
-
-          <div className="grid grid-cols-3 gap-2 pt-2">
-            <button
-              onClick={() => handleDemoSignIn('admin')}
-              disabled={loading}
-              className="py-2.5 bg-white dark:bg-slate-850 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 dark:border-slate-800 rounded-xl text-[10px] font-extrabold text-slate-700 dark:text-slate-300 transition cursor-pointer select-none"
-            >
-              Admin Demo
-            </button>
-            <button
-              onClick={() => handleDemoSignIn('teacher')}
-              disabled={loading}
-              className="py-2.5 bg-white dark:bg-slate-850 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 dark:border-slate-800 rounded-xl text-[10px] font-extrabold text-slate-700 dark:text-slate-300 transition cursor-pointer select-none"
-            >
-              Teacher Demo
-            </button>
-            <button
-              onClick={() => handleDemoSignIn('student')}
-              disabled={loading}
-              className="py-2.5 bg-white dark:bg-slate-850 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 dark:border-slate-800 rounded-xl text-[10px] font-extrabold text-slate-700 dark:text-slate-300 transition cursor-pointer select-none"
-            >
-              Student Demo
-            </button>
-          </div>
-        </div>
-
-        <div className="text-center text-[10px] text-slate-400 font-medium">
-          Authorized candidates and educators only. Access logged by system proctors.
-        </div>
       </div>
     </div>
   );
