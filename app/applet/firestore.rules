@@ -1,0 +1,154 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com');
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "abhikgamingworldabhikpro3@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "admin")
+      );
+    }
+
+    function isTeacher() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "teacher"
+      );
+    }
+
+    function isStudent() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "student"
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin() || isTeacher());
+      allow create: if isSignedIn() && request.auth.uid == userId && 
+                    incoming().uid == userId &&
+                    incoming().role in ['student', 'teacher', 'admin'] &&
+                    (incoming().role == 'student' || request.auth.token.email == "abhikgamingworldabhikpro3@gmail.com" || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (request.auth.uid == userId && 
+         incoming().role == existing().role && 
+         incoming().email == existing().email)
+      );
+    }
+
+    // --- Subjects Collection ---
+    match /subjects/{subjectId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // --- Questions Collection ---
+    match /questions/{questionId} {
+      allow read: if isSignedIn(); // Safe since answerKey is separated
+      allow write: if isAdmin() || isTeacher();
+
+      // Answer key subcollection - highly secure, students can NEVER read
+      match /keys/answerKey {
+        allow read, write: if isAdmin() || isTeacher();
+      }
+    }
+
+    // --- Exams Collection ---
+    match /exams/{examId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || 
+        isTeacher() || 
+        exists(/databases/$(database)/documents/assignments/$(request.auth.uid + "_" + examId))
+      );
+      allow write: if isAdmin() || isTeacher();
+    }
+
+    // --- Assignments Collection ---
+    match /assignments/{assignmentId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || 
+        isTeacher() || 
+        resource.data.studentId == request.auth.uid
+      );
+      allow write: if isAdmin() || isTeacher();
+    }
+
+    // --- Attempts Collection ---
+    match /attempts/{attemptId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || 
+        isTeacher() || 
+        resource.data.studentId == request.auth.uid
+      );
+      
+      allow create: if isStudent() && 
+                    incoming().studentId == request.auth.uid &&
+                    incoming().status == 'started';
+
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        isTeacher() || 
+        (isStudent() && 
+         existing().studentId == request.auth.uid && 
+         incoming().studentId == request.auth.uid &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'submittedAt', 'violations', 'updatedAt', 'score', 'percentage', 'accuracy']))
+      );
+      
+      // Answers Subcollection inside an attempt
+      match /answers/{questionId} {
+        allow read: if isSignedIn() && (
+          isAdmin() || 
+          isTeacher() || 
+          get(/databases/$(database)/documents/attempts/$(attemptId)).data.studentId == request.auth.uid
+        );
+        allow write: if isStudent() && 
+                     get(/databases/$(database)/documents/attempts/$(attemptId)).data.studentId == request.auth.uid &&
+                     get(/databases/$(database)/documents/attempts/$(attemptId)).data.status == 'started';
+      }
+    }
+
+    // --- Proctoring Events ---
+    match /proctoringEvents/{eventId} {
+      allow read: if isAdmin() || isTeacher();
+      allow create: if isSignedIn() && incoming().studentId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // --- Audit Logs ---
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Append-only audit trail
+    }
+  }
+}

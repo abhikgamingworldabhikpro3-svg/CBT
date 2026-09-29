@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+    <linearGradient id="capGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#e2e8f0" />
+    </linearGradient>
+  </defs>
+  <!-- Background Circle with smooth rounded corner shadow -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)" />
+  
+  <!-- Stylized graduation cap & clipboard overlay -->
+  <g transform="translate(106, 116)" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Clipboard/Board -->
+    <rect x="20" y="60" width="260" height="280" rx="20" fill="rgba(255,255,255,0.1)" stroke-width="16" />
+    <!-- Clip -->
+    <path d="M100,60 L100,40 C100,29 109,20 120,20 L180,20 C191,20 200,29 200,40 L200,60" stroke-width="16" fill="#ffffff" />
+    
+    <!-- Lines / Exam details -->
+    <line x1="70" y1="140" x2="230" y2="140" stroke-width="16" />
+    <line x1="70" y1="200" x2="230" y2="200" stroke-width="16" />
+    <line x1="70" y1="260" x2="170" y2="260" stroke-width="16" />
+    
+    <!-- Checkmarks -->
+    <path d="M50,140 L55,145 L65,135" stroke="#34d399" stroke-width="18" />
+    <path d="M50,200 L55,205 L65,195" stroke="#34d399" stroke-width="18" />
+    <circle cx="58" cy="260" r="8" fill="#fbbf24" stroke="none" />
+  </g>
+</svg>

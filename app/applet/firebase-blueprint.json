@@ -1,0 +1,204 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Stores core profile and role info.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "teacher", "student"] },
+        "active": { "type": "boolean" },
+        "studentId": { "type": "string", "maxLength": 50 },
+        "subjects": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "email", "role", "active", "createdAt", "updatedAt"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Subjects managed by the administrator.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "createdAt", "updatedAt"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Questions inside the question banks.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "topic": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "enum": ["single-choice", "multiple-choice", "true-false", "numerical"] },
+        "questionText": { "type": "string", "minLength": 5, "maxLength": 5000 },
+        "options": { "type": "array" },
+        "correctAnswers": { "type": "array" },
+        "marks": { "type": "number" },
+        "negativeMarks": { "type": "number" },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "explanation": { "type": "string", "maxLength": 2000 },
+        "imageUrl": { "type": "string", "maxLength": 2000 },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "subjectId", "type", "questionText", "marks", "negativeMarks", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Exam": {
+      "title": "Exam",
+      "description": "Exam configuration and settings.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "instructions": { "type": "string", "maxLength": 5000 },
+        "subjectId": { "type": "string" },
+        "duration": { "type": "number" },
+        "startAt": { "type": "string" },
+        "endAt": { "type": "string" },
+        "totalMarks": { "type": "number" },
+        "maxAttempts": { "type": "number" },
+        "randomizeQuestions": { "type": "boolean" },
+        "randomizeOptions": { "type": "boolean" },
+        "autoSubmit": { "type": "boolean" },
+        "resultRelease": { "type": "string", "enum": ["immediate", "manual"] },
+        "status": { "type": "string", "enum": ["draft", "published"] },
+        "questionIds": { "type": "array" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "subjectId", "duration", "startAt", "endAt", "totalMarks", "maxAttempts", "randomizeQuestions", "randomizeOptions", "autoSubmit", "resultRelease", "status", "questionIds", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Assignment mapping exams to students.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "examId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "status": { "type": "string", "enum": ["assigned", "started", "completed"] },
+        "assignedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "examId", "studentId", "status", "assignedAt", "createdAt", "updatedAt"]
+    },
+    "Attempt": {
+      "title": "Attempt",
+      "description": "An exam attempt by a student.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "examId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "deadline": { "type": "string" },
+        "submittedAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["started", "submitted"] },
+        "score": { "type": "number" },
+        "percentage": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "violations": { "type": "number" },
+        "resultStatus": { "type": "string", "enum": ["pending", "released"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "examId", "studentId", "startedAt", "deadline", "status", "violations", "resultStatus", "createdAt", "updatedAt"]
+    },
+    "Answer": {
+      "title": "Answer",
+      "description": "An answer saved during an attempt.",
+      "type": "object",
+      "properties": {
+        "attemptId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "examId": { "type": "string" },
+        "questionId": { "type": "string" },
+        "answer": { "type": "object" },
+        "savedAt": { "type": "string" }
+      },
+      "required": ["attemptId", "studentId", "examId", "questionId", "answer", "savedAt"]
+    },
+    "ProctoringEvent": {
+      "title": "ProctoringEvent",
+      "description": "Log browser or camera violation events.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "attemptId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "examId": { "type": "string" },
+        "type": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "severity": { "type": "string", "enum": ["INFO", "WARNING", "CRITICAL"] },
+        "metadata": { "type": "object" }
+      },
+      "required": ["id", "attemptId", "studentId", "examId", "type", "timestamp", "severity", "metadata"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Log administrative operations.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "targetId": { "type": "string" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["id", "actorId", "actorEmail", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    },
+    "subjects/{subjectId}": {
+      "schema": "Subject",
+      "description": "Admin-defined subjects."
+    },
+    "questions/{questionId}": {
+      "schema": "Question",
+      "description": "Teacher-defined question bank."
+    },
+    "exams/{examId}": {
+      "schema": "Exam",
+      "description": "Exam configuration templates."
+    },
+    "assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Exam assignments for specific students."
+    },
+    "attempts/{attemptId}": {
+      "schema": "Attempt",
+      "description": "Individual student test attempts."
+    },
+    "attempts/{attemptId}/answers/{questionId}": {
+      "schema": "Answer",
+      "description": "Answers saved inside a specific test attempt."
+    },
+    "proctoringEvents/{eventId}": {
+      "schema": "ProctoringEvent",
+      "description": "Central security event log of violations."
+    },
+    "auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Administrator and system audit log entries."
+    }
+  }
+}

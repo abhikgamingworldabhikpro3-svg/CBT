@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "name": "Computer Based Test Engine",
+  "short_name": "CBT Engine",
+  "description": "Professional Computer Based Test examination platform with proctoring monitoring.",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#4f46e5",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
