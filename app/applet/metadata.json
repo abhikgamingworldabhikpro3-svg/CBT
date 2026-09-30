@@ -1,6 +1,0 @@
-{
-  "name": "cbt-examination-engine",
-  "description": "Professional CBT examination applet featuring Google sign-in auth, secure Firestore rule evaluation, multi-step exam wizards, and active browser/webcam proctoring logs.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

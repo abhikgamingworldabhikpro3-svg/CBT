@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "CBT Exam Room",
+  "description": "Professional Computer Based Test examination platform with active proctoring surveillance, tab locks, and real-time grading.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

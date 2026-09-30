@@ -1,10 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "module": "ESNext",
-    "types": ["vite/client"],
+    "types": ["vite/client", "vite-plugin-pwa/client"],
     "lib": [
       "ES2022",
       "DOM",

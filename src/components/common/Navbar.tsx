@@ -2,16 +2,24 @@ import React from 'react';
 import { auth } from '../../firebase/config';
 import { signOut } from 'firebase/auth';
 import { User } from '../../types';
-import { LogOut, ShieldAlert, BookOpen, UserCheck, Settings, Users, FolderKanban } from 'lucide-react';
+import { LogOut, ShieldAlert, BookOpen, UserCheck, Settings, Users, FolderKanban, Sun, Moon } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavbarProps {
   currentUserProfile: User;
   onNavigate: (page: string, params?: Record<string, string>) => void;
   activeTab: string;
+  theme: string;
+  onToggleTheme: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ currentUserProfile, onNavigate, activeTab }) => {
+export const Navbar: React.FC<NavbarProps> = ({ 
+  currentUserProfile, 
+  onNavigate, 
+  activeTab, 
+  theme, 
+  onToggleTheme 
+}) => {
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -115,6 +123,14 @@ export const Navbar: React.FC<NavbarProps> = ({ currentUserProfile, onNavigate, 
         {/* Zone 3: 1-2 primary actions */}
         <div className="flex items-center gap-3">
           <PWAInstallButton />
+          
+          <button
+            onClick={onToggleTheme}
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 cursor-pointer transition-colors"
+          >
+            {theme === 'dark' ? <Sun className="h-4 w-4 text-amber-500" /> : <Moon className="h-4 w-4 text-slate-600" />}
+          </button>
           
           <div className="hidden sm:flex flex-col items-end text-right">
             <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[120px]">
